@@ -1,18 +1,22 @@
-import { useState, useEffect } from 'react'
+mport { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+
+const OPTIONS = [
+  { value: 'good',     label: 'Good Experience',    color: '#2d7a2d', bg: '#f0faf0' },
+  { value: 'meh',      label: 'Meh Experience',      color: '#92700a', bg: '#fdf8e8' },
+  { value: 'terrible', label: 'Terrible Experience', color: '#b83232', bg: '#fdf0f0' },
+  { value: 'unknown',  label: "Don't Remember Them", color: '#666',    bg: '#f5f5f5' },
+]
 
 export default function Vote({ session }) {
   const [events, setEvents] = useState([])
   const [recruits, setRecruits] = useState([])
   const [selectedEventId, setSelectedEventId] = useState('')
-  const [myVotes, setMyVotes] = useState({}) // recruitId -> 'good' | 'bad' | null
+  const [myVotes, setMyVotes] = useState({})
   const [saving, setSaving] = useState({})
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    fetchData()
-  }, [])
-
+  useEffect(() => { fetchData() }, [])
   useEffect(() => {
     if (selectedEventId) fetchMyVotes(selectedEventId)
     else setMyVotes({})
@@ -43,31 +47,22 @@ export default function Vote({ session }) {
 
   async function castVote(recruitId, vote) {
     const current = myVotes[recruitId]
-    const newVote = current === vote ? null : vote // tap same = toggle off
+    const newVote = current === vote ? null : vote
 
-    // Optimistic update
     setMyVotes(v => ({ ...v, [recruitId]: newVote }))
     setSaving(s => ({ ...s, [recruitId]: true }))
 
     if (newVote === null) {
-      await supabase
-        .from('votes')
-        .delete()
+      await supabase.from('votes').delete()
         .eq('recruit_id', recruitId)
         .eq('event_id', selectedEventId)
         .eq('user_id', session.user.id)
     } else {
       await supabase.from('votes').upsert(
-        {
-          recruit_id: recruitId,
-          event_id: selectedEventId,
-          user_id: session.user.id,
-          vote: newVote,
-        },
+        { recruit_id: recruitId, event_id: selectedEventId, user_id: session.user.id, vote: newVote },
         { onConflict: 'recruit_id,event_id,user_id' }
       )
     }
-
     setSaving(s => ({ ...s, [recruitId]: false }))
   }
 
@@ -75,87 +70,68 @@ export default function Vote({ session }) {
 
   return (
     <div style={{ maxWidth: '600px', margin: '0 auto', padding: '1.5rem 1rem' }}>
-      {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <h1 style={{ fontSize: '20px', fontWeight: '500' }}>Vote</h1>
-        <button
-          onClick={() => supabase.auth.signOut()}
-          style={{ fontSize: '13px', color: '#aaa', background: 'none', border: 'none', padding: 0 }}
-        >
+        <button onClick={() => supabase.auth.signOut()} style={{ fontSize: '13px', color: '#aaa', background: 'none', border: 'none', padding: 0 }}>
           Sign out
         </button>
       </div>
 
-      {loading ? (
-        <p style={{ color: '#aaa', fontSize: '14px' }}>Loading...</p>
-      ) : events.length === 0 ? (
-        <div className="card">
-          <p style={{ color: '#888', fontSize: '14px' }}>No events have been added yet. Check back soon.</p>
-        </div>
+      {loading ? <p style={{ color: '#aaa', fontSize: '14px' }}>Loading...</p> : events.length === 0 ? (
+        <div className="card"><p style={{ color: '#888', fontSize: '14px' }}>No events yet — check back soon.</p></div>
       ) : (
         <>
-          {/* Event selector */}
           <div style={{ marginBottom: '1.25rem' }}>
             <label style={{ fontSize: '13px', color: '#777', display: 'block', marginBottom: '6px' }}>Event</label>
             <select value={selectedEventId} onChange={e => setSelectedEventId(e.target.value)}>
-              {events.map(ev => (
-                <option key={ev.id} value={ev.id}>{ev.name}</option>
-              ))}
+              {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
             </select>
           </div>
 
           {recruits.length === 0 ? (
-            <div className="card">
-              <p style={{ color: '#888', fontSize: '14px' }}>No recruits added yet.</p>
-            </div>
+            <div className="card"><p style={{ color: '#888', fontSize: '14px' }}>No recruits added yet.</p></div>
           ) : (
             <>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
                 <p style={{ fontSize: '13px', color: '#888' }}>{recruits.length} recruits</p>
                 <span className="badge badge-gray">{votedCount} / {recruits.length} voted</span>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {recruits.map(r => (
-                  <div
-                    key={r.id}
-                    className="card"
-                    style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 16px' }}
-                  >
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: '500', fontSize: '15px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {r.name}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {recruits.map(r => {
+                  const current = myVotes[r.id]
+                  return (
+                    <div key={r.id} className="card" style={{ padding: '14px 16px' }}>
+                      <div style={{ fontWeight: '500', fontSize: '15px', marginBottom: '2px' }}>{r.name}</div>
+                      {r.major && <div style={{ fontSize: '13px', color: '#999', marginBottom: '10px' }}>{r.major}</div>}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                        {OPTIONS.map(opt => (
+                          <button
+                            key={opt.value}
+                            disabled={saving[r.id]}
+                            onClick={() => castVote(r.id, opt.value)}
+                            style={{
+                              padding: '8px 10px',
+                              fontSize: '13px',
+                              borderRadius: '8px',
+                              border: `1px solid ${opt.color}`,
+                              background: current === opt.value ? opt.color : opt.bg,
+                              color: current === opt.value ? '#fff' : opt.color,
+                              fontWeight: current === opt.value ? '500' : '400',
+                              cursor: 'pointer',
+                              transition: 'all 0.1s',
+                            }}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
                       </div>
-                      {r.major && (
-                        <div style={{ fontSize: '13px', color: '#999' }}>{r.major}</div>
-                      )}
                     </div>
-                    <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-                      <button
-                        className={`btn-good${myVotes[r.id] === 'good' ? ' active' : ''}`}
-                        onClick={() => castVote(r.id, 'good')}
-                        disabled={saving[r.id]}
-                        style={{ padding: '8px 16px', fontSize: '16px', lineHeight: 1 }}
-                        aria-label="Good"
-                      >
-                        ✓
-                      </button>
-                      <button
-                        className={`btn-bad${myVotes[r.id] === 'bad' ? ' active' : ''}`}
-                        onClick={() => castVote(r.id, 'bad')}
-                        disabled={saving[r.id]}
-                        style={{ padding: '8px 16px', fontSize: '16px', lineHeight: 1 }}
-                        aria-label="Bad"
-                      >
-                        ✗
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
-
               <p style={{ fontSize: '12px', color: '#bbb', textAlign: 'center', marginTop: '1.5rem' }}>
-                Votes are saved automatically. Tap again to undo.
+                Tap again to undo a vote.
               </p>
             </>
           )}
