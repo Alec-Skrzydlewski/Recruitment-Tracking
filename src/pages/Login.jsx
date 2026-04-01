@@ -3,8 +3,9 @@ import { supabase } from '../lib/supabase'
 
 export default function Login() {
   const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [isSignUp, setIsSignUp] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [sent, setSent] = useState(false)
   const [error, setError] = useState('')
 
   async function handleSubmit(e) {
@@ -12,13 +13,11 @@ export default function Login() {
     setLoading(true)
     setError('')
 
-    const { error } = await supabase.auth.signInWithOtp({
-      email: email.trim().toLowerCase(),
-      options: { emailRedirectTo: window.location.origin },
-    })
+    const { error } = isSignUp
+      ? await supabase.auth.signUp({ email, password })
+      : await supabase.auth.signInWithPassword({ email, password })
 
     if (error) setError(error.message)
-    else setSent(true)
     setLoading(false)
   }
 
@@ -32,30 +31,17 @@ export default function Login() {
     }}>
       <div style={{ width: '100%', maxWidth: '400px' }}>
         <h1 style={{ fontSize: '22px', fontWeight: '500', marginBottom: '4px' }}>
-          Recruitment Tracker
+          Alpha-Nu Recruitment
         </h1>
         <p style={{ fontSize: '14px', color: '#888', marginBottom: '1.5rem' }}>
-          Only invited members can sign in.
+          {isSignUp ? 'Create your account.' : 'Sign in to your account.'}
         </p>
 
-        {sent ? (
+        <form onSubmit={handleSubmit}>
           <div className="card">
-            <p style={{ fontWeight: '500', marginBottom: '6px' }}>Check your email</p>
-            <p style={{ fontSize: '14px', color: '#666', marginBottom: '12px' }}>
-              We sent a login link to <strong>{email}</strong>. Click it to sign in — no password needed.
-            </p>
-            <button
-              onClick={() => setSent(false)}
-              style={{ fontSize: '13px', color: '#888', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
-            >
-              Use a different email
-            </button>
-          </div>
-        ) : (
-          <form onSubmit={handleSubmit}>
-            <div className="card">
+            <div style={{ marginBottom: '12px' }}>
               <label style={{ fontSize: '13px', color: '#666', display: 'block', marginBottom: '6px' }}>
-                Email address
+                Email
               </label>
               <input
                 type="email"
@@ -65,20 +51,46 @@ export default function Login() {
                 required
                 autoFocus
               />
-              {error && (
-                <p style={{ color: '#b83232', fontSize: '13px', marginTop: '8px' }}>{error}</p>
-              )}
-              <button
-                type="submit"
-                className="btn-primary"
-                style={{ width: '100%', marginTop: '12px' }}
-                disabled={loading}
-              >
-                {loading ? 'Sending...' : 'Send login link'}
-              </button>
             </div>
-          </form>
-        )}
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ fontSize: '13px', color: '#666', display: 'block', marginBottom: '6px' }}>
+                Password
+              </label>
+              <input
+                type="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="••••••••"
+                required
+                minLength={6}
+              />
+            </div>
+
+            {error && (
+              <p style={{ color: '#b83232', fontSize: '13px', marginBottom: '8px' }}>{error}</p>
+            )}
+
+            <button
+              type="submit"
+              className="btn-primary"
+              style={{ width: '100%', marginBottom: '12px' }}
+              disabled={loading}
+            >
+              {loading ? 'Please wait...' : isSignUp ? 'Create account' : 'Sign in'}
+            </button>
+
+            <p style={{ fontSize: '13px', color: '#888', textAlign: 'center' }}>
+              {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
+              <button
+                type="button"
+                onClick={() => { setIsSignUp(!isSignUp); setError('') }}
+                style={{ background: 'none', border: 'none', padding: 0, color: '#1a1a1a', textDecoration: 'underline', cursor: 'pointer', fontSize: '13px' }}
+              >
+                {isSignUp ? 'Sign in' : 'Register'}
+              </button>
+            </p>
+          </div>
+        </form>
       </div>
     </div>
   )
