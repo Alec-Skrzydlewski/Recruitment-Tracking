@@ -7,7 +7,7 @@ import Admin from './pages/Admin'
 import AuthConfirm from './pages/AuthConfirm'
 
 export default function App() {
-  const [session, setSession] = useState(undefined) // undefined = still loading
+  const [session, setSession] = useState(undefined)
   const [role, setRole] = useState(null)
   const [loadingRole, setLoadingRole] = useState(false)
 
@@ -52,6 +52,10 @@ export default function App() {
         <Route
           path="/login"
           element={session ? <Navigate to="/" replace /> : <Login />}
+        />
+        <Route
+          path="/auth/confirm"
+          element={<AuthConfirm />}
         />
         <Route
           path="/"
