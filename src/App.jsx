@@ -4,6 +4,7 @@ import { supabase } from './lib/supabase'
 import Login from './pages/Login'
 import Vote from './pages/Vote'
 import Admin from './pages/Admin'
+import AuthConfirm from './pages/AuthConfirm'
 
 export default function App() {
   const [session, setSession] = useState(undefined) // undefined = still loading
