@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 
 const OPTIONS = [
-  { value: 'good',     label: 'Good',         color: '#2d7a2d', bg: '#f0faf0', score: 2  },
-  { value: 'meh',      label: 'Meh',           color: '#92700a', bg: '#fdf8e8', score: 1  },
-  { value: 'terrible', label: 'Terrible',      color: '#b83232', bg: '#fdf0f0', score: -1 },
-  { value: 'unknown',  label: "Don't Remember", color: '#666',   bg: '#f5f5f5', score: 0  },
+  { value: 'good',     label: 'Good',          color: '#2d7a2d', bg: '#f0faf0', score: 2  },
+  { value: 'meh',      label: 'Meh',            color: '#92700a', bg: '#fdf8e8', score: 1  },
+  { value: 'terrible', label: 'Terrible',       color: '#b83232', bg: '#fdf0f0', score: -1 },
+  { value: 'unknown',  label: "Don't Remember", color: '#666',    bg: '#f5f5f5', score: 0  },
 ]
 
 function NoteEditor({ recruitId, initialValue, onSaved }) {
@@ -40,6 +40,72 @@ function NoteEditor({ recruitId, initialValue, onSaved }) {
           {saving ? 'Saving...' : 'Save notes'}
         </button>
       )}
+    </div>
+  )
+}
+
+function PhotoUpload({ recruit, onUpdated }) {
+  const [uploading, setUploading] = useState(false)
+  const fileRef = useRef()
+
+  async function handleFile(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    setUploading(true)
+
+    const ext = file.name.split('.').pop()
+    const path = `${recruit.id}.${ext}`
+
+    // Remove old photo if exists
+    if (recruit.photo_url) {
+      const oldPath = recruit.photo_url.split('/recruit-photos/')[1]
+      if (oldPath) await supabase.storage.from('recruit-photos').remove([oldPath])
+    }
+
+    const { error: uploadError } = await supabase.storage
+      .from('recruit-photos')
+      .upload(path, file, { upsert: true })
+
+    if (!uploadError) {
+      const { data } = supabase.storage.from('recruit-photos').getPublicUrl(path)
+      await supabase.from('recruits').update({ photo_url: data.publicUrl }).eq('id', recruit.id)
+      onUpdated({ ...recruit, photo_url: data.publicUrl })
+    }
+
+    setUploading(false)
+    e.target.value = ''
+  }
+
+  async function removePhoto() {
+    if (!confirm('Remove this photo?')) return
+    const path = recruit.photo_url.split('/recruit-photos/')[1]
+    if (path) await supabase.storage.from('recruit-photos').remove([path])
+    await supabase.from('recruits').update({ photo_url: null }).eq('id', recruit.id)
+    onUpdated({ ...recruit, photo_url: null })
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' }}>
+      {recruit.photo_url ? (
+        <>
+          <img
+            src={recruit.photo_url}
+            alt={recruit.name}
+            style={{ width: '48px', height: '48px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #e8e8e5' }}
+          />
+          <button onClick={() => fileRef.current.click()} style={{ fontSize: '12px', padding: '4px 10px' }}>
+            {uploading ? 'Uploading...' : 'Change photo'}
+          </button>
+          <button onClick={removePhoto} style={{ fontSize: '12px', padding: '4px 10px', color: '#b83232', borderColor: '#b83232' }}>
+            Remove
+          </button>
+        </>
+      ) : (
+        <button onClick={() => fileRef.current.click()} style={{ fontSize: '12px', padding: '4px 10px' }}>
+          {uploading ? 'Uploading...' : '+ Add photo'}
+        </button>
+      )}
+      <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} style={{ display: 'none' }} />
     </div>
   )
 }
@@ -87,6 +153,10 @@ export default function Admin({ session }) {
 
   async function deleteRecruit(r) {
     if (!confirm(`Remove ${r.name}?`)) return
+    if (r.photo_url) {
+      const path = r.photo_url.split('/recruit-photos/')[1]
+      if (path) await supabase.storage.from('recruit-photos').remove([path])
+    }
     await supabase.from('recruits').delete().eq('id', r.id)
     setRecruits(list => list.filter(x => x.id !== r.id))
   }
@@ -163,6 +233,13 @@ export default function Admin({ session }) {
                 return (
                   <div key={r.id} className="card" style={{ marginBottom: '10px' }}>
                     <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                      {r.photo_url ? (
+                        <img src={r.photo_url} alt={r.name} style={{ width: '48px', height: '48px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: '1px solid #e8e8e5' }} />
+                      ) : (
+                        <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: '#f0efe8', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', fontWeight: '500', color: '#aaa' }}>
+                          {r.name.charAt(0).toUpperCase()}
+                        </div>
+                      )}
                       <div style={{ flex: 1 }}>
                         <div style={{ fontWeight: '500', fontSize: '15px' }}>{r.name}</div>
                         {r.major && <div style={{ fontSize: '13px', color: '#999' }}>{r.major}</div>}
@@ -179,8 +256,6 @@ export default function Admin({ session }) {
                             <span className="badge badge-gray">no votes</span>
                           )}
                         </div>
-
-                        {/* Per-event breakdown */}
                         {events.length > 0 && (
                           <div style={{ display: 'flex', gap: '10px', marginTop: '6px', flexWrap: 'wrap' }}>
                             {events.map(ev => {
@@ -241,12 +316,25 @@ export default function Admin({ session }) {
               {recruits.length === 0 ? (
                 <div className="card"><p style={{ color: '#888', fontSize: '14px' }}>No recruits yet.</p></div>
               ) : recruits.map(r => (
-                <div key={r.id} className="card" style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: '500' }}>{r.name}</div>
-                    {r.major && <div style={{ fontSize: '13px', color: '#999' }}>{r.major}</div>}
+                <div key={r.id} className="card" style={{ marginBottom: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    {r.photo_url ? (
+                      <img src={r.photo_url} alt={r.name} style={{ width: '44px', height: '44px', borderRadius: '50%', objectFit: 'cover', border: '1px solid #e8e8e5', flexShrink: 0 }} />
+                    ) : (
+                      <div style={{ width: '44px', height: '44px', borderRadius: '50%', background: '#f0efe8', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '15px', fontWeight: '500', color: '#aaa' }}>
+                        {r.name.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: '500' }}>{r.name}</div>
+                      {r.major && <div style={{ fontSize: '13px', color: '#999' }}>{r.major}</div>}
+                      <PhotoUpload
+                        recruit={r}
+                        onUpdated={updated => setRecruits(list => list.map(x => x.id === updated.id ? updated : x))}
+                      />
+                    </div>
+                    <button onClick={() => deleteRecruit(r)} style={{ color: '#ccc', background: 'none', border: 'none', fontSize: '20px', padding: '2px 6px', lineHeight: 1 }}>×</button>
                   </div>
-                  <button onClick={() => deleteRecruit(r)} style={{ color: '#ccc', background: 'none', border: 'none', fontSize: '20px', padding: '2px 6px', lineHeight: 1 }}>×</button>
                 </div>
               ))}
             </div>
