@@ -48,10 +48,8 @@ export default function Vote({ session }) {
   async function castVote(recruitId, vote) {
     const current = myVotes[recruitId]
     const newVote = current === vote ? null : vote
-
     setMyVotes(v => ({ ...v, [recruitId]: newVote }))
     setSaving(s => ({ ...s, [recruitId]: true }))
-
     if (newVote === null) {
       await supabase.from('votes').delete()
         .eq('recruit_id', recruitId)
@@ -102,8 +100,23 @@ export default function Vote({ session }) {
                   const current = myVotes[r.id]
                   return (
                     <div key={r.id} className="card" style={{ padding: '14px 16px' }}>
-                      <div style={{ fontWeight: '500', fontSize: '15px', marginBottom: '2px' }}>{r.name}</div>
-                      {r.major && <div style={{ fontSize: '13px', color: '#999', marginBottom: '10px' }}>{r.major}</div>}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
+                        {r.photo_url ? (
+                          <img
+                            src={r.photo_url}
+                            alt={r.name}
+                            style={{ width: '56px', height: '56px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: '1px solid #e8e8e5' }}
+                          />
+                        ) : (
+                          <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: '#f0efe8', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', fontWeight: '500', color: '#aaa' }}>
+                            {r.name.charAt(0).toUpperCase()}
+                          </div>
+                        )}
+                        <div>
+                          <div style={{ fontWeight: '500', fontSize: '15px' }}>{r.name}</div>
+                          {r.major && <div style={{ fontSize: '13px', color: '#999' }}>{r.major}</div>}
+                        </div>
+                      </div>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
                         {OPTIONS.map(opt => (
                           <button
