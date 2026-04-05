@@ -10,28 +10,44 @@ const OPTIONS = [
 
 export default function Vote({ session }) {
   const [events, setEvents] = useState([])
-  const [recruits, setRecruits] = useState([])
+  const [allRecruits, setAllRecruits] = useState([])
+  const [eventRecruits, setEventRecruits] = useState([])
   const [selectedEventId, setSelectedEventId] = useState('')
   const [myVotes, setMyVotes] = useState({})
   const [saving, setSaving] = useState({})
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => { fetchData() }, [])
+  useEffect(() => { fetchBase() }, [])
+
   useEffect(() => {
-    if (selectedEventId) fetchMyVotes(selectedEventId)
-    else setMyVotes({})
+    if (selectedEventId) {
+      fetchEventRecruits(selectedEventId)
+      fetchMyVotes(selectedEventId)
+    } else {
+      setEventRecruits([])
+      setMyVotes({})
+    }
   }, [selectedEventId])
 
-  async function fetchData() {
+  async function fetchBase() {
     setLoading(true)
     const [{ data: evs }, { data: recs }] = await Promise.all([
       supabase.from('events').select('*').order('created_at', { ascending: true }),
       supabase.from('recruits').select('*').order('name', { ascending: true }),
     ])
     setEvents(evs || [])
-    setRecruits(recs || [])
+    setAllRecruits(recs || [])
     if (evs?.length) setSelectedEventId(evs[evs.length - 1].id)
     setLoading(false)
+  }
+
+  async function fetchEventRecruits(eventId) {
+    const { data } = await supabase
+      .from('event_recruits')
+      .select('recruit_id')
+      .eq('event_id', eventId)
+    const ids = new Set((data || []).map(r => r.recruit_id))
+    setEventRecruits(allRecruits.filter(r => ids.has(r.id)))
   }
 
   async function fetchMyVotes(eventId) {
@@ -86,27 +102,25 @@ export default function Vote({ session }) {
             </select>
           </div>
 
-          {recruits.length === 0 ? (
-            <div className="card"><p style={{ color: '#888', fontSize: '14px' }}>No recruits added yet.</p></div>
+          {eventRecruits.length === 0 ? (
+            <div className="card">
+              <p style={{ color: '#888', fontSize: '14px' }}>No recruits checked in for this event yet.</p>
+            </div>
           ) : (
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
-                <p style={{ fontSize: '13px', color: '#888' }}>{recruits.length} recruits</p>
-                <span className="badge badge-gray">{votedCount} / {recruits.length} voted</span>
+                <p style={{ fontSize: '13px', color: '#888' }}>{eventRecruits.length} recruits attended</p>
+                <span className="badge badge-gray">{votedCount} / {eventRecruits.length} voted</span>
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {recruits.map(r => {
+                {eventRecruits.map(r => {
                   const current = myVotes[r.id]
                   return (
                     <div key={r.id} className="card" style={{ padding: '14px 16px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
                         {r.photo_url ? (
-                          <img
-                            src={r.photo_url}
-                            alt={r.name}
-                            style={{ width: '56px', height: '56px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: '1px solid #e8e8e5' }}
-                          />
+                          <img src={r.photo_url} alt={r.name} style={{ width: '56px', height: '56px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: '1px solid #e8e8e5' }} />
                         ) : (
                           <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: '#f0efe8', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', fontWeight: '500', color: '#aaa' }}>
                             {r.name.charAt(0).toUpperCase()}
@@ -124,15 +138,12 @@ export default function Vote({ session }) {
                             disabled={saving[r.id]}
                             onClick={() => castVote(r.id, opt.value)}
                             style={{
-                              padding: '8px 10px',
-                              fontSize: '13px',
-                              borderRadius: '8px',
+                              padding: '8px 10px', fontSize: '13px', borderRadius: '8px',
                               border: `1px solid ${opt.color}`,
                               background: current === opt.value ? opt.color : opt.bg,
                               color: current === opt.value ? '#fff' : opt.color,
                               fontWeight: current === opt.value ? '500' : '400',
-                              cursor: 'pointer',
-                              transition: 'all 0.1s',
+                              cursor: 'pointer', transition: 'all 0.1s',
                             }}
                           >
                             {opt.label}
