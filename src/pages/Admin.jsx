@@ -107,34 +107,20 @@ function PhotoUpload({ recruit, onUpdated }) {
   )
 }
 
-// Vertical stacked bar for a single event
 function VerticalEventBar({ eventName, counts, total, maxTotal }) {
   const BAR_HEIGHT = 160
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', flex: '1 1 80px', minWidth: '60px' }}>
-      {/* Bar */}
       <div style={{ width: '100%', height: BAR_HEIGHT, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', borderRadius: '6px', overflow: 'hidden', background: '#f5f5f3' }}>
-        {total === 0 ? null : OPTIONS.slice().reverse().map(opt => {
+        {total > 0 && OPTIONS.slice().reverse().map(opt => {
           const count = counts[opt.value] || 0
           if (count === 0) return null
-          const heightPct = (count / maxTotal) * 100
           return (
-            <div
-              key={opt.value}
-              title={`${opt.label}: ${count}`}
-              style={{
-                width: '100%',
-                height: `${(count / total) * (total / maxTotal) * 100}%`,
-                background: opt.color,
-                transition: 'height 0.3s',
-              }}
-            />
+            <div key={opt.value} title={`${opt.label}: ${count}`} style={{ width: '100%', height: `${(count / total) * (total / maxTotal) * 100}%`, background: opt.color, transition: 'height 0.3s' }} />
           )
         })}
       </div>
-      {/* Total label */}
       <span style={{ fontSize: '12px', fontWeight: '500', color: '#555' }}>{total}</span>
-      {/* Event name */}
       <span style={{ fontSize: '11px', color: '#aaa', textAlign: 'center', lineHeight: 1.3, maxWidth: '80px', wordBreak: 'break-word' }}>{eventName}</span>
     </div>
   )
@@ -143,12 +129,10 @@ function VerticalEventBar({ eventName, counts, total, maxTotal }) {
 function RecruitDashboard({ recruit, votes, events, notes, onNotesSaved }) {
   const recruitVotes = votes.filter(v => v.recruit_id === recruit.id)
   const total = recruitVotes.length
-
   const counts = {}
   OPTIONS.forEach(o => { counts[o.value] = recruitVotes.filter(v => v.vote === o.value).length })
   const score = OPTIONS.reduce((sum, o) => sum + (counts[o.value] || 0) * o.score, 0)
 
-  // Per-event data for vertical bars
   const eventData = events.map(ev => {
     const evVotes = recruitVotes.filter(v => v.event_id === ev.id)
     const evCounts = {}
@@ -159,15 +143,10 @@ function RecruitDashboard({ recruit, votes, events, notes, onNotesSaved }) {
 
   return (
     <div>
-      {/* Large hero photo + name */}
       <div className="card" style={{ marginBottom: '12px', textAlign: 'center', padding: '2rem 1.5rem' }}>
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
           {recruit.photo_url ? (
-            <img
-              src={recruit.photo_url}
-              alt={recruit.name}
-              style={{ width: '160px', height: '160px', borderRadius: '50%', objectFit: 'cover', border: '3px solid #e8e8e5' }}
-            />
+            <img src={recruit.photo_url} alt={recruit.name} style={{ width: '160px', height: '160px', borderRadius: '50%', objectFit: 'cover', border: '3px solid #e8e8e5' }} />
           ) : (
             <div style={{ width: '160px', height: '160px', borderRadius: '50%', background: '#f0efe8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '56px', fontWeight: '500', color: '#ccc' }}>
               {recruit.name.charAt(0).toUpperCase()}
@@ -190,12 +169,9 @@ function RecruitDashboard({ recruit, votes, events, notes, onNotesSaved }) {
         </div>
       </div>
 
-      {/* Vote breakdown horizontal bars */}
       <div className="card" style={{ marginBottom: '12px' }}>
         <div style={{ fontWeight: '500', fontSize: '14px', marginBottom: '16px' }}>Vote breakdown</div>
-        {total === 0 ? (
-          <p style={{ color: '#aaa', fontSize: '14px' }}>No votes yet.</p>
-        ) : (
+        {total === 0 ? <p style={{ color: '#aaa', fontSize: '14px' }}>No votes yet.</p> : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {OPTIONS.map(opt => {
               const count = counts[opt.value] || 0
@@ -216,7 +192,6 @@ function RecruitDashboard({ recruit, votes, events, notes, onNotesSaved }) {
         )}
       </div>
 
-      {/* Per-event vertical stacked bar chart */}
       {events.length > 0 && (
         <div className="card" style={{ marginBottom: '12px' }}>
           <div style={{ fontWeight: '500', fontSize: '14px', marginBottom: '20px' }}>By event</div>
@@ -226,16 +201,9 @@ function RecruitDashboard({ recruit, votes, events, notes, onNotesSaved }) {
             <>
               <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', overflowX: 'auto', paddingBottom: '4px' }}>
                 {eventData.map(({ ev, evCounts, evTotal }) => (
-                  <VerticalEventBar
-                    key={ev.id}
-                    eventName={ev.name}
-                    counts={evCounts}
-                    total={evTotal}
-                    maxTotal={maxEventTotal}
-                  />
+                  <VerticalEventBar key={ev.id} eventName={ev.name} counts={evCounts} total={evTotal} maxTotal={maxEventTotal} />
                 ))}
               </div>
-              {/* Legend */}
               <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #f0efe8' }}>
                 {OPTIONS.map(o => (
                   <div key={o.value} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
@@ -249,14 +217,46 @@ function RecruitDashboard({ recruit, votes, events, notes, onNotesSaved }) {
         </div>
       )}
 
-      {/* Notes */}
       <div className="card">
         <div style={{ fontWeight: '500', fontSize: '14px', marginBottom: '12px' }}>Notes</div>
-        <NoteEditor
-          recruitId={recruit.id}
-          initialValue={notes[recruit.id]}
-          onSaved={val => onNotesSaved(recruit.id, val)}
-        />
+        <NoteEditor recruitId={recruit.id} initialValue={notes[recruit.id]} onSaved={val => onNotesSaved(recruit.id, val)} />
+      </div>
+    </div>
+  )
+}
+
+// Attendance checklist for an event
+function AttendancePanel({ event, recruits, roster, onToggle }) {
+  const attended = new Set(roster)
+  const sorted = [...recruits].sort((a, b) => a.name.localeCompare(b.name))
+
+  return (
+    <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #f0efe8' }}>
+      <div style={{ fontSize: '13px', fontWeight: '500', marginBottom: '10px', color: '#555' }}>
+        Attendance — {attended.size} / {recruits.length} recruits
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '320px', overflowY: 'auto' }}>
+        {sorted.map(r => (
+          <label key={r.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', padding: '6px 8px', borderRadius: '8px', background: attended.has(r.id) ? '#f0faf0' : 'transparent', transition: 'background 0.1s' }}>
+            <input
+              type="checkbox"
+              checked={attended.has(r.id)}
+              onChange={() => onToggle(event, r.id, attended.has(r.id))}
+              style={{ width: '16px', height: '16px', accentColor: '#2d7a2d', flexShrink: 0 }}
+            />
+            {r.photo_url ? (
+              <img src={r.photo_url} alt={r.name} style={{ width: '28px', height: '28px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
+            ) : (
+              <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: '#e8e8e5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: '500', color: '#aaa', flexShrink: 0 }}>
+                {r.name.charAt(0).toUpperCase()}
+              </div>
+            )}
+            <span style={{ fontSize: '14px', fontWeight: attended.has(r.id) ? '500' : '400', color: attended.has(r.id) ? '#2d7a2d' : '#1a1a1a' }}>
+              {r.name}
+            </span>
+            {r.major && <span style={{ fontSize: '12px', color: '#aaa' }}>{r.major}</span>}
+          </label>
+        ))}
       </div>
     </div>
   )
@@ -270,17 +270,20 @@ export default function Admin({ session }) {
   const [notes, setNotes] = useState({})
   const [loading, setLoading] = useState(true)
   const [selectedRecruitId, setSelectedRecruitId] = useState('')
+  const [expandedEventId, setExpandedEventId] = useState(null)
+  const [rosters, setRosters] = useState({}) // eventId -> Set of recruitIds
   const [newName, setNewName] = useState('')
   const [newMajor, setNewMajor] = useState('')
   const [newEvent, setNewEvent] = useState('')
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
-    const [{ data: recs }, { data: evs }, { data: vs }, { data: ns }] = await Promise.all([
+    const [{ data: recs }, { data: evs }, { data: vs }, { data: ns }, { data: ers }] = await Promise.all([
       supabase.from('recruits').select('*').order('name'),
       supabase.from('events').select('*').order('created_at'),
       supabase.from('votes').select('recruit_id, event_id, vote'),
       supabase.from('notes').select('recruit_id, content'),
+      supabase.from('event_recruits').select('event_id, recruit_id'),
     ])
     setRecruits(recs || [])
     setEvents(evs || [])
@@ -288,11 +291,38 @@ export default function Admin({ session }) {
     const nm = {}
     ns?.forEach(n => { nm[n.recruit_id] = n.content })
     setNotes(nm)
+    // Build rosters map
+    const rm = {}
+    ers?.forEach(er => {
+      if (!rm[er.event_id]) rm[er.event_id] = []
+      rm[er.event_id].push(er.recruit_id)
+    })
+    setRosters(rm)
     if (recs?.length) setSelectedRecruitId(prev => prev || recs[0].id)
     setLoading(false)
   }, [])
 
   useEffect(() => { fetchAll() }, [fetchAll])
+
+  async function toggleAttendance(event, recruitId, isPresent) {
+    if (isPresent) {
+      // Remove from roster and delete their votes for this event
+      await supabase.from('event_recruits')
+        .delete()
+        .eq('event_id', event.id)
+        .eq('recruit_id', recruitId)
+      await supabase.from('votes')
+        .delete()
+        .eq('event_id', event.id)
+        .eq('recruit_id', recruitId)
+      setRosters(r => ({ ...r, [event.id]: (r[event.id] || []).filter(id => id !== recruitId) }))
+      setVotes(v => v.filter(v => !(v.event_id === event.id && v.recruit_id === recruitId)))
+    } else {
+      // Add to roster
+      await supabase.from('event_recruits').insert({ event_id: event.id, recruit_id: recruitId })
+      setRosters(r => ({ ...r, [event.id]: [...(r[event.id] || []), recruitId] }))
+    }
+  }
 
   async function addRecruit(e) {
     e.preventDefault()
@@ -331,6 +361,7 @@ export default function Admin({ session }) {
     if (!confirm(`Remove "${ev.name}"?`)) return
     await supabase.from('events').delete().eq('id', ev.id)
     setEvents(list => list.filter(x => x.id !== ev.id))
+    setVotes(v => v.filter(v => v.event_id !== ev.id))
   }
 
   const selectedRecruit = recruits.find(r => r.id === selectedRecruitId)
@@ -353,8 +384,7 @@ export default function Admin({ session }) {
             borderRadius: 0, padding: '8px 18px',
             fontWeight: tab === t ? '500' : '400',
             color: tab === t ? '#1a1a1a' : '#999',
-            marginBottom: '-1px', fontSize: '14px',
-            whiteSpace: 'nowrap',
+            marginBottom: '-1px', fontSize: '14px', whiteSpace: 'nowrap',
           }}>
             {t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
@@ -407,10 +437,7 @@ export default function Admin({ session }) {
                     <div style={{ flex: 1 }}>
                       <div style={{ fontWeight: '500' }}>{r.name}</div>
                       {r.major && <div style={{ fontSize: '13px', color: '#999' }}>{r.major}</div>}
-                      <PhotoUpload
-                        recruit={r}
-                        onUpdated={updated => setRecruits(list => list.map(x => x.id === updated.id ? updated : x))}
-                      />
+                      <PhotoUpload recruit={r} onUpdated={updated => setRecruits(list => list.map(x => x.id === updated.id ? updated : x))} />
                     </div>
                     <button onClick={() => deleteRecruit(r)} style={{ color: '#ccc', background: 'none', border: 'none', fontSize: '20px', padding: '2px 6px', lineHeight: 1 }}>×</button>
                   </div>
@@ -428,12 +455,35 @@ export default function Admin({ session }) {
               </form>
               {events.length === 0 ? (
                 <div className="card"><p style={{ color: '#888', fontSize: '14px' }}>No events yet.</p></div>
-              ) : events.map(ev => (
-                <div key={ev.id} className="card" style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
-                  <span style={{ flex: 1, fontWeight: '500' }}>{ev.name}</span>
-                  <button onClick={() => deleteEvent(ev)} style={{ color: '#ccc', background: 'none', border: 'none', fontSize: '20px', padding: '2px 6px', lineHeight: 1 }}>×</button>
-                </div>
-              ))}
+              ) : events.map(ev => {
+                const rosterIds = rosters[ev.id] || []
+                const isExpanded = expandedEventId === ev.id
+                return (
+                  <div key={ev.id} className="card" style={{ marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: '500' }}>{ev.name}</div>
+                        <div style={{ fontSize: '12px', color: '#aaa', marginTop: '2px' }}>{rosterIds.length} recruit{rosterIds.length !== 1 ? 's' : ''} attending</div>
+                      </div>
+                      <button
+                        onClick={() => setExpandedEventId(isExpanded ? null : ev.id)}
+                        style={{ fontSize: '13px', padding: '5px 12px', marginRight: '8px' }}
+                      >
+                        {isExpanded ? 'Done' : 'Take attendance'}
+                      </button>
+                      <button onClick={() => deleteEvent(ev)} style={{ color: '#ccc', background: 'none', border: 'none', fontSize: '20px', padding: '2px 6px', lineHeight: 1 }}>×</button>
+                    </div>
+                    {isExpanded && (
+                      <AttendancePanel
+                        event={ev}
+                        recruits={recruits}
+                        roster={rosterIds}
+                        onToggle={toggleAttendance}
+                      />
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
         </>
