@@ -107,23 +107,39 @@ function PhotoUpload({ recruit, onUpdated }) {
   )
 }
 
-// Horizontal stacked bar showing vote distribution
-function VoteBar({ counts, total, height = 12 }) {
-  if (total === 0) return <div style={{ height, borderRadius: 6, background: '#f0efe8', fontSize: '12px', color: '#ccc', display: 'flex', alignItems: 'center', paddingLeft: 8 }}>no votes</div>
+// Vertical stacked bar for a single event
+function VerticalEventBar({ eventName, counts, total, maxTotal }) {
+  const BAR_HEIGHT = 160
   return (
-    <div style={{ display: 'flex', height, borderRadius: 6, overflow: 'hidden', width: '100%' }}>
-      {OPTIONS.map(opt => {
-        const pct = (counts[opt.value] || 0) / total * 100
-        if (pct === 0) return null
-        return (
-          <div key={opt.value} style={{ width: `${pct}%`, background: opt.color, transition: 'width 0.3s' }} title={`${opt.label}: ${counts[opt.value]}`} />
-        )
-      })}
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', flex: '1 1 80px', minWidth: '60px' }}>
+      {/* Bar */}
+      <div style={{ width: '100%', height: BAR_HEIGHT, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', borderRadius: '6px', overflow: 'hidden', background: '#f5f5f3' }}>
+        {total === 0 ? null : OPTIONS.slice().reverse().map(opt => {
+          const count = counts[opt.value] || 0
+          if (count === 0) return null
+          const heightPct = (count / maxTotal) * 100
+          return (
+            <div
+              key={opt.value}
+              title={`${opt.label}: ${count}`}
+              style={{
+                width: '100%',
+                height: `${(count / total) * (total / maxTotal) * 100}%`,
+                background: opt.color,
+                transition: 'height 0.3s',
+              }}
+            />
+          )
+        })}
+      </div>
+      {/* Total label */}
+      <span style={{ fontSize: '12px', fontWeight: '500', color: '#555' }}>{total}</span>
+      {/* Event name */}
+      <span style={{ fontSize: '11px', color: '#aaa', textAlign: 'center', lineHeight: 1.3, maxWidth: '80px', wordBreak: 'break-word' }}>{eventName}</span>
     </div>
   )
 }
 
-// Individual recruit analytics dashboard
 function RecruitDashboard({ recruit, votes, events, notes, onNotesSaved }) {
   const recruitVotes = votes.filter(v => v.recruit_id === recruit.id)
   const total = recruitVotes.length
@@ -132,38 +148,61 @@ function RecruitDashboard({ recruit, votes, events, notes, onNotesSaved }) {
   OPTIONS.forEach(o => { counts[o.value] = recruitVotes.filter(v => v.vote === o.value).length })
   const score = OPTIONS.reduce((sum, o) => sum + (counts[o.value] || 0) * o.score, 0)
 
-  const maxCount = Math.max(...Object.values(counts), 1)
+  // Per-event data for vertical bars
+  const eventData = events.map(ev => {
+    const evVotes = recruitVotes.filter(v => v.event_id === ev.id)
+    const evCounts = {}
+    OPTIONS.forEach(o => { evCounts[o.value] = evVotes.filter(v => v.vote === o.value).length })
+    return { ev, evCounts, evTotal: evVotes.length }
+  })
+  const maxEventTotal = Math.max(...eventData.map(d => d.evTotal), 1)
 
   return (
     <div>
-      {/* Recruit header */}
-      <div className="card" style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '12px' }}>
-        <Avatar recruit={recruit} size={64} />
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: '500', fontSize: '18px' }}>{recruit.name}</div>
-          {recruit.major && <div style={{ fontSize: '14px', color: '#999' }}>{recruit.major}</div>}
+      {/* Large hero photo + name */}
+      <div className="card" style={{ marginBottom: '12px', textAlign: 'center', padding: '2rem 1.5rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
+          {recruit.photo_url ? (
+            <img
+              src={recruit.photo_url}
+              alt={recruit.name}
+              style={{ width: '160px', height: '160px', borderRadius: '50%', objectFit: 'cover', border: '3px solid #e8e8e5' }}
+            />
+          ) : (
+            <div style={{ width: '160px', height: '160px', borderRadius: '50%', background: '#f0efe8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '56px', fontWeight: '500', color: '#ccc' }}>
+              {recruit.name.charAt(0).toUpperCase()}
+            </div>
+          )}
         </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: '36px', fontWeight: '500', lineHeight: 1, color: score > 0 ? '#2d7a2d' : score < 0 ? '#b83232' : '#ccc' }}>
-            {score > 0 ? '+' : ''}{score}
+        <div style={{ fontSize: '22px', fontWeight: '500' }}>{recruit.name}</div>
+        {recruit.major && <div style={{ fontSize: '14px', color: '#999', marginTop: '4px' }}>{recruit.major}</div>}
+        <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'center', gap: '2rem' }}>
+          <div>
+            <div style={{ fontSize: '36px', fontWeight: '500', color: score > 0 ? '#2d7a2d' : score < 0 ? '#b83232' : '#ccc', lineHeight: 1 }}>
+              {score > 0 ? '+' : ''}{score}
+            </div>
+            <div style={{ fontSize: '12px', color: '#aaa', marginTop: '4px' }}>net score</div>
           </div>
-          <div style={{ fontSize: '12px', color: '#aaa', marginTop: '2px' }}>{total} vote{total !== 1 ? 's' : ''}</div>
+          <div>
+            <div style={{ fontSize: '36px', fontWeight: '500', color: '#555', lineHeight: 1 }}>{total}</div>
+            <div style={{ fontSize: '12px', color: '#aaa', marginTop: '4px' }}>total votes</div>
+          </div>
         </div>
       </div>
 
-      {/* Vote breakdown chart */}
+      {/* Vote breakdown horizontal bars */}
       <div className="card" style={{ marginBottom: '12px' }}>
         <div style={{ fontWeight: '500', fontSize: '14px', marginBottom: '16px' }}>Vote breakdown</div>
         {total === 0 ? (
           <p style={{ color: '#aaa', fontSize: '14px' }}>No votes yet.</p>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {OPTIONS.map(opt => {
               const count = counts[opt.value] || 0
               const pct = total > 0 ? Math.round(count / total * 100) : 0
               return (
                 <div key={opt.value}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
                     <span style={{ fontSize: '13px', color: opt.color, fontWeight: '500' }}>{opt.label}</span>
                     <span style={{ fontSize: '13px', color: '#888' }}>{count} vote{count !== 1 ? 's' : ''} · {pct}%</span>
                   </div>
@@ -177,44 +216,36 @@ function RecruitDashboard({ recruit, votes, events, notes, onNotesSaved }) {
         )}
       </div>
 
-      {/* Per-event breakdown */}
+      {/* Per-event vertical stacked bar chart */}
       {events.length > 0 && (
         <div className="card" style={{ marginBottom: '12px' }}>
-          <div style={{ fontWeight: '500', fontSize: '14px', marginBottom: '16px' }}>By event</div>
-          {events.map(ev => {
-            const evVotes = recruitVotes.filter(v => v.event_id === ev.id)
-            const evTotal = evVotes.length
-            const evCounts = {}
-            OPTIONS.forEach(o => { evCounts[o.value] = evVotes.filter(v => v.vote === o.value).length })
-            return (
-              <div key={ev.id} style={{ marginBottom: '14px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                  <span style={{ fontSize: '13px', fontWeight: '500' }}>{ev.name}</span>
-                  <span style={{ fontSize: '12px', color: '#aaa' }}>{evTotal} vote{evTotal !== 1 ? 's' : ''}</span>
-                </div>
-                <VoteBar counts={evCounts} total={evTotal} height={10} />
-                {evTotal > 0 && (
-                  <div style={{ display: 'flex', gap: '10px', marginTop: '4px', flexWrap: 'wrap' }}>
-                    {OPTIONS.filter(o => evCounts[o.value] > 0).map(o => (
-                      <span key={o.value} style={{ fontSize: '11px', color: o.color }}>
-                        {evCounts[o.value]} {o.label}
-                      </span>
-                    ))}
+          <div style={{ fontWeight: '500', fontSize: '14px', marginBottom: '20px' }}>By event</div>
+          {eventData.every(d => d.evTotal === 0) ? (
+            <p style={{ color: '#aaa', fontSize: '14px' }}>No event votes yet.</p>
+          ) : (
+            <>
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', overflowX: 'auto', paddingBottom: '4px' }}>
+                {eventData.map(({ ev, evCounts, evTotal }) => (
+                  <VerticalEventBar
+                    key={ev.id}
+                    eventName={ev.name}
+                    counts={evCounts}
+                    total={evTotal}
+                    maxTotal={maxEventTotal}
+                  />
+                ))}
+              </div>
+              {/* Legend */}
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #f0efe8' }}>
+                {OPTIONS.map(o => (
+                  <div key={o.value} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <div style={{ width: '10px', height: '10px', borderRadius: '2px', background: o.color }} />
+                    <span style={{ fontSize: '11px', color: '#888' }}>{o.label}</span>
                   </div>
-                )}
+                ))}
               </div>
-            )
-          })}
-
-          {/* Legend */}
-          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '8px', paddingTop: '12px', borderTop: '1px solid #f0efe8' }}>
-            {OPTIONS.map(o => (
-              <div key={o.value} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                <div style={{ width: '10px', height: '10px', borderRadius: '2px', background: o.color }} />
-                <span style={{ fontSize: '11px', color: '#888' }}>{o.label}</span>
-              </div>
-            ))}
-          </div>
+            </>
+          )}
         </div>
       )}
 
@@ -231,106 +262,6 @@ function RecruitDashboard({ recruit, votes, events, notes, onNotesSaved }) {
   )
 }
 
-// Comparison view — all recruits ranked
-function ComparisonView({ recruits, votes, events }) {
-  const [filterEvent, setFilterEvent] = useState('all')
-
-  function countsFor(rid) {
-    const filtered = filterEvent === 'all'
-      ? votes.filter(v => v.recruit_id === rid)
-      : votes.filter(v => v.recruit_id === rid && v.event_id === filterEvent)
-    const counts = {}
-    OPTIONS.forEach(o => { counts[o.value] = filtered.filter(v => v.vote === o.value).length })
-    return counts
-  }
-
-  function scoreFor(rid) {
-    const counts = countsFor(rid)
-    return OPTIONS.reduce((sum, o) => sum + (counts[o.value] || 0) * o.score, 0)
-  }
-
-  function totalFor(rid) {
-    const counts = countsFor(rid)
-    return Object.values(counts).reduce((a, b) => a + b, 0)
-  }
-
-  const sorted = [...recruits].sort((a, b) => scoreFor(b.id) - scoreFor(a.id))
-  const maxScore = Math.max(...sorted.map(r => Math.abs(scoreFor(r.id))), 1)
-
-  return (
-    <div>
-      {/* Event filter */}
-      <div style={{ marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <label style={{ fontSize: '13px', color: '#777', whiteSpace: 'nowrap' }}>Filter by event</label>
-        <select value={filterEvent} onChange={e => setFilterEvent(e.target.value)} style={{ maxWidth: '240px' }}>
-          <option value="all">All events</option>
-          {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
-        </select>
-      </div>
-
-      {recruits.length === 0 ? (
-        <div className="card"><p style={{ color: '#888', fontSize: '14px' }}>No recruits yet.</p></div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {sorted.map((r, i) => {
-            const counts = countsFor(r.id)
-            const score = scoreFor(r.id)
-            const total = totalFor(r.id)
-            const scorePct = Math.abs(score) / maxScore * 100
-
-            return (
-              <div key={r.id} className="card" style={{ padding: '12px 16px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
-                  {/* Rank */}
-                  <div style={{ width: '24px', fontSize: '13px', fontWeight: '500', color: '#aaa', flexShrink: 0, textAlign: 'center' }}>
-                    {i + 1}
-                  </div>
-                  <Avatar recruit={r} size={36} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: '500', fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
-                    {r.major && <div style={{ fontSize: '12px', color: '#999' }}>{r.major}</div>}
-                  </div>
-                  <div style={{ fontSize: '20px', fontWeight: '500', flexShrink: 0, color: score > 0 ? '#2d7a2d' : score < 0 ? '#b83232' : '#ccc' }}>
-                    {score > 0 ? '+' : ''}{score}
-                  </div>
-                </div>
-
-                {/* Score bar */}
-                <div style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div style={{ flex: 1, height: '6px', borderRadius: '3px', background: '#f5f5f3', overflow: 'hidden' }}>
-                    <div style={{
-                      height: '100%',
-                      width: `${scorePct}%`,
-                      background: score >= 0 ? '#2d7a2d' : '#b83232',
-                      borderRadius: '3px',
-                      transition: 'width 0.3s',
-                    }} />
-                  </div>
-                  <span style={{ fontSize: '11px', color: '#aaa', flexShrink: 0 }}>{total} vote{total !== 1 ? 's' : ''}</span>
-                </div>
-
-                {/* Stacked vote bar */}
-                <VoteBar counts={counts} total={total} height={8} />
-
-                {/* Vote count pills */}
-                <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
-                  {OPTIONS.map(opt => counts[opt.value] > 0 && (
-                    <span key={opt.value} style={{ fontSize: '11px', fontWeight: '600', padding: '2px 7px', borderRadius: '999px', background: opt.bg, color: opt.color }}>
-                      {counts[opt.value]} {opt.label}
-                    </span>
-                  ))}
-                  {total === 0 && <span style={{ fontSize: '11px', color: '#ccc' }}>no votes</span>}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Main Admin ──────────────────────────────────────────────
 export default function Admin({ session }) {
   const [tab, setTab] = useState('dashboard')
   const [recruits, setRecruits] = useState([])
@@ -403,7 +334,7 @@ export default function Admin({ session }) {
   }
 
   const selectedRecruit = recruits.find(r => r.id === selectedRecruitId)
-  const TABS = ['dashboard', 'comparison', 'recruits', 'events']
+  const TABS = ['dashboard', 'recruits', 'events']
 
   return (
     <div style={{ maxWidth: '780px', margin: '0 auto', padding: '1.5rem 1rem' }}>
@@ -414,8 +345,7 @@ export default function Admin({ session }) {
         </button>
       </div>
 
-      {/* Tab bar */}
-      <div style={{ display: 'flex', borderBottom: '1px solid #e8e8e5', marginBottom: '1.5rem', overflowX: 'auto' }}>
+      <div style={{ display: 'flex', borderBottom: '1px solid #e8e8e5', marginBottom: '1.5rem' }}>
         {TABS.map(t => (
           <button key={t} onClick={() => setTab(t)} style={{
             background: 'none', border: 'none',
@@ -442,11 +372,7 @@ export default function Admin({ session }) {
                 <>
                   <div style={{ marginBottom: '1.25rem' }}>
                     <label style={{ fontSize: '13px', color: '#777', display: 'block', marginBottom: '6px' }}>Select recruit</label>
-                    <select
-                      value={selectedRecruitId}
-                      onChange={e => setSelectedRecruitId(e.target.value)}
-                      style={{ maxWidth: '320px' }}
-                    >
+                    <select value={selectedRecruitId} onChange={e => setSelectedRecruitId(e.target.value)} style={{ maxWidth: '320px' }}>
                       {recruits.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                     </select>
                   </div>
@@ -462,11 +388,6 @@ export default function Admin({ session }) {
                 </>
               )}
             </div>
-          )}
-
-          {/* COMPARISON */}
-          {tab === 'comparison' && (
-            <ComparisonView recruits={recruits} votes={votes} events={events} />
           )}
 
           {/* RECRUITS */}
