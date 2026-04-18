@@ -281,7 +281,7 @@ export default function Admin({ session }) {
     const [{ data: recs }, { data: evs }, { data: vs }, { data: ns }, { data: ers }] = await Promise.all([
       supabase.from('recruits').select('*').order('name'),
       supabase.from('events').select('*').order('created_at'),
-      supabase.from('votes').select('recruit_id, event_id, vote'),
+      supabase.from('votes').select('recruit_id, event_id, vote').limit(10000),
       supabase.from('notes').select('recruit_id, content'),
       supabase.from('event_recruits').select('event_id, recruit_id'),
     ])
