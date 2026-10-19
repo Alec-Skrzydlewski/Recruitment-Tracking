@@ -9,11 +9,15 @@ export default function Admin({ token, me }) {
   const [newMajor, setNewMajor] = useState('')
   const [newEvent, setNewEvent] = useState('')
   const [newEmail, setNewEmail] = useState('')
+  const [noteDrafts, setNoteDrafts] = useState({})
 
   async function load() {
     setLoading(true)
     const d = await callApi('getAdminData', token)
     setData(d)
+    const drafts = {}
+    ;(d.notes || []).forEach(n => { drafts[n.recruitId] = n.content || '' })
+    setNoteDrafts(drafts)
     setLoading(false)
   }
 
@@ -38,6 +42,11 @@ export default function Admin({ token, me }) {
     if (!newEmail.trim()) return
     await callApi('manageUser', token, { op: 'add', email: newEmail.trim(), role: 'brother' })
     setNewEmail(''); load()
+  }
+
+  async function saveNote(recruitId) {
+    await callApi('saveNote', token, { recruitId, content: noteDrafts[recruitId] || '' })
+    alert('Note saved')
   }
 
   async function wipe() {
@@ -82,17 +91,25 @@ export default function Admin({ token, me }) {
         <div>
           {data.recruits.length === 0 ? <div className="card"><p style={{ color: '#888' }}>No recruits yet.</p></div> :
             data.recruits.map(r => (
-              <div key={r.id} className="card" style={{ marginBottom: 8 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <div key={r.id} className="card" style={{ marginBottom: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
                   <div>
                     <strong>{r.name}</strong>
                     {r.major && <span style={{ color: '#999' }}> · {r.major}</span>}
                   </div>
                   <div style={{ fontSize: 18, fontWeight: 500 }}>{scoreFor(r.id) ?? '—'}</div>
                 </div>
-                <div style={{ fontSize: 12, color: '#aaa', marginTop: 4 }}>
+                <div style={{ fontSize: 12, color: '#aaa', marginBottom: 8 }}>
                   {data.votes.filter(v => v.recruitId === r.id).length} votes
                 </div>
+                <textarea
+                  value={noteDrafts[r.id] || ''}
+                  onChange={e => setNoteDrafts(d => ({ ...d, [r.id]: e.target.value }))}
+                  placeholder="Notes about this recruit..."
+                  rows={3}
+                  style={{ width: '100%', marginBottom: 8, fontSize: 13 }}
+                />
+                <button onClick={() => saveNote(r.id)} className="btn-primary" style={{ fontSize: 13, padding: '6px 12px' }}>Save note</button>
               </div>
             ))}
         </div>
