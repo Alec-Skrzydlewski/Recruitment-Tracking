@@ -1,164 +1,76 @@
 import { useState, useEffect } from 'react'
-import { supabase } from '../lib/supabase'
+import { callApi } from '../lib/api'
 
-const OPTIONS = [
-  { value: 'good',     label: 'Good Experience',    color: '#2d7a2d', bg: '#f0faf0' },
-  { value: 'meh',      label: 'Meh Experience',      color: '#92700a', bg: '#fdf8e8' },
-  { value: 'terrible', label: 'Terrible Experience', color: '#b83232', bg: '#fdf0f0' },
-  { value: 'unknown',  label: "Don't Remember Them", color: '#666',    bg: '#f5f5f5' },
-]
-
-export default function Vote({ session }) {
-  const [events, setEvents] = useState([])
-  const [allRecruits, setAllRecruits] = useState([])
-  const [eventRecruits, setEventRecruits] = useState([])
-  const [selectedEventId, setSelectedEventId] = useState('')
-  const [myVotes, setMyVotes] = useState({})
-  const [saving, setSaving] = useState({})
+export default function Vote({ token, me }) {
+  const [data, setData] = useState(null)
+  const [eventId, setEventId] = useState('')
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => { fetchBase() }, [])
-
   useEffect(() => {
-    if (selectedEventId) {
-      fetchEventRecruits(selectedEventId)
-      fetchMyVotes(selectedEventId)
-    } else {
-      setEventRecruits([])
-      setMyVotes({})
-    }
-  }, [selectedEventId])
+    callApi('getVoteData', token).then(d => {
+      setData(d)
+      if (d.events?.length) setEventId(d.events[d.events.length - 1].id)
+      setLoading(false)
+    }).catch(err => { alert(err.message); setLoading(false) })
+  }, [token])
 
-  async function fetchBase() {
-    setLoading(true)
-    const [{ data: evs }, { data: recs }] = await Promise.all([
-      supabase.from('events').select('*').order('created_at', { ascending: true }),
-      supabase.from('recruits').select('*').order('name', { ascending: true }),
-    ])
-    setEvents(evs || [])
-    setAllRecruits(recs || [])
-    if (evs?.length) setSelectedEventId(evs[evs.length - 1].id)
-    setLoading(false)
+  async function vote(recruitId, score) {
+    await callApi('castVote', token, { eventId, recruitId, score })
+    setData(prev => {
+      const myVotes = prev.myVotes.filter(v => !(v.eventId === eventId && v.recruitId === recruitId))
+      myVotes.push({ eventId, recruitId, score })
+      return { ...prev, myVotes }
+    })
   }
 
-  async function fetchEventRecruits(eventId) {
-    const { data } = await supabase
-      .from('event_recruits')
-      .select('recruit_id')
-      .eq('event_id', eventId)
-    const ids = new Set((data || []).map(r => r.recruit_id))
-    setEventRecruits(allRecruits.filter(r => ids.has(r.id)))
-  }
+  if (loading || !data) return <div style={{ padding: '2rem' }}>Loading...</div>
 
-  async function fetchMyVotes(eventId) {
-    const { data } = await supabase
-      .from('votes')
-      .select('recruit_id, vote')
-      .eq('event_id', eventId)
-      .eq('user_id', session.user.id)
-    const map = {}
-    data?.forEach(v => { map[v.recruit_id] = v.vote })
-    setMyVotes(map)
-  }
-
-  async function castVote(recruitId, vote) {
-    const current = myVotes[recruitId]
-    const newVote = current === vote ? null : vote
-    setMyVotes(v => ({ ...v, [recruitId]: newVote }))
-    setSaving(s => ({ ...s, [recruitId]: true }))
-    if (newVote === null) {
-      await supabase.from('votes').delete()
-        .eq('recruit_id', recruitId)
-        .eq('event_id', selectedEventId)
-        .eq('user_id', session.user.id)
-    } else {
-      await supabase.from('votes').upsert(
-        { recruit_id: recruitId, event_id: selectedEventId, user_id: session.user.id, vote: newVote },
-        { onConflict: 'recruit_id,event_id,user_id' }
-      )
-    }
-    setSaving(s => ({ ...s, [recruitId]: false }))
-  }
-
-  const votedCount = Object.values(myVotes).filter(Boolean).length
+  const attended = new Set(
+    (data.attendance || []).filter(a => a.eventId === eventId).map(a => a.recruitId)
+  )
+  const recruits = (data.recruits || []).filter(r => attended.has(r.id))
+  const myVoteMap = {}
+  ;(data.myVotes || []).filter(v => v.eventId === eventId).forEach(v => { myVoteMap[v.recruitId] = v.score })
 
   return (
-    <div style={{ maxWidth: '600px', margin: '0 auto', padding: '1.5rem 1rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-        <h1 style={{ fontSize: '20px', fontWeight: '500' }}>Vote</h1>
-        <button onClick={() => supabase.auth.signOut()} style={{ fontSize: '13px', color: '#aaa', background: 'none', border: 'none', padding: 0 }}>
+    <div style={{ maxWidth: 640, margin: '0 auto', padding: '1.5rem 1rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <h1 style={{ fontSize: 20 }}>Vote</h1>
+        <button onClick={() => { localStorage.removeItem('google_token'); location.reload() }} style={{ fontSize: 13, color: '#aaa', background: 'none', border: 'none' }}>
           Sign out
         </button>
       </div>
 
-      {loading ? <p style={{ color: '#aaa', fontSize: '14px' }}>Loading...</p> : events.length === 0 ? (
-        <div className="card"><p style={{ color: '#888', fontSize: '14px' }}>No events yet — check back soon.</p></div>
+      {data.events?.length === 0 ? (
+        <div className="card"><p style={{ color: '#888' }}>No events yet.</p></div>
       ) : (
         <>
-          <div style={{ marginBottom: '1.25rem' }}>
-            <label style={{ fontSize: '13px', color: '#777', display: 'block', marginBottom: '6px' }}>Event</label>
-            <select value={selectedEventId} onChange={e => setSelectedEventId(e.target.value)}>
-              {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
-            </select>
-          </div>
+          <label style={{ fontSize: 13, color: '#777', display: 'block', marginBottom: 6 }}>Event</label>
+          <select value={eventId} onChange={e => setEventId(e.target.value)} style={{ marginBottom: 16 }}>
+            {data.events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
+          </select>
 
-          {eventRecruits.length === 0 ? (
-            <div className="card">
-              <p style={{ color: '#888', fontSize: '14px' }}>No recruits checked in for this event yet.</p>
+          {recruits.length === 0 ? (
+            <div className="card"><p style={{ color: '#888' }}>No recruits checked in for this event.</p></div>
+          ) : recruits.map(r => (
+            <div key={r.id} className="card" style={{ marginBottom: 12 }}>
+              <div style={{ fontWeight: 500, marginBottom: 8 }}>{r.name} {r.major && <span style={{ color: '#999', fontWeight: 400 }}>· {r.major}</span>}</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {[1,2,3,4,5,6,7,8,9,10].map(n => (
+                  <button
+                    key={n}
+                    onClick={() => vote(r.id, n)}
+                    style={{
+                      width: 36, height: 36, borderRadius: 8,
+                      background: myVoteMap[r.id] === n ? '#1a1a1a' : '#fff',
+                      color: myVoteMap[r.id] === n ? '#fff' : '#1a1a1a',
+                      border: '1px solid #ddd', fontWeight: 500,
+                    }}
+                  >{n}</button>
+                ))}
+              </div>
             </div>
-          ) : (
-            <>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
-                <p style={{ fontSize: '13px', color: '#888' }}>{eventRecruits.length} recruits attended</p>
-                <span className="badge badge-gray">{votedCount} / {eventRecruits.length} voted</span>
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {eventRecruits.map(r => {
-                  const current = myVotes[r.id]
-                  return (
-                    <div key={r.id} className="card" style={{ padding: '14px 16px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
-                        {r.photo_url ? (
-                          <img src={r.photo_url} alt={r.name} style={{ width: '56px', height: '56px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: '1px solid #e8e8e5' }} />
-                        ) : (
-                          <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: '#f0efe8', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', fontWeight: '500', color: '#aaa' }}>
-                            {r.name.charAt(0).toUpperCase()}
-                          </div>
-                        )}
-                        <div>
-                          <div style={{ fontWeight: '500', fontSize: '15px' }}>{r.name}</div>
-                          {r.major && <div style={{ fontSize: '13px', color: '#999' }}>{r.major}</div>}
-                        </div>
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                        {OPTIONS.map(opt => (
-                          <button
-                            key={opt.value}
-                            disabled={saving[r.id]}
-                            onClick={() => castVote(r.id, opt.value)}
-                            style={{
-                              padding: '8px 10px', fontSize: '13px', borderRadius: '8px',
-                              border: `1px solid ${opt.color}`,
-                              background: current === opt.value ? opt.color : opt.bg,
-                              color: current === opt.value ? '#fff' : opt.color,
-                              fontWeight: current === opt.value ? '500' : '400',
-                              cursor: 'pointer', transition: 'all 0.1s',
-                            }}
-                          >
-                            {opt.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-              <p style={{ fontSize: '12px', color: '#bbb', textAlign: 'center', marginTop: '1.5rem' }}>
-                Tap again to undo a vote.
-              </p>
-            </>
-          )}
+          ))}
         </>
       )}
     </div>
