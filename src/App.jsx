@@ -1,84 +1,51 @@
 import { useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { supabase } from './lib/supabase'
+import { GoogleOAuthProvider, useGoogleLogin } from '@react-oauth/google'
+import { callApi } from './lib/api'
 import Login from './pages/Login'
 import Vote from './pages/Vote'
 import Admin from './pages/Admin'
-import AuthConfirm from './pages/AuthConfirm'
 
-export default function App() {
-  const [session, setSession] = useState(undefined)
-  const [role, setRole] = useState(null)
-  const [loadingRole, setLoadingRole] = useState(false)
+const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
 
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-    })
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-      if (!session) setRole(null)
-    })
-
-    return () => subscription.unsubscribe()
-  }, [])
+function AppInner() {
+  const [token, setToken] = useState(localStorage.getItem('google_token') || null)
+  const [me, setMe] = useState(null)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (!session) return
-    setLoadingRole(true)
-    supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', session.user.id)
-      .single()
-      .then(({ data }) => {
-        setRole(data?.role || 'brother')
-        setLoadingRole(false)
-      })
-  }, [session])
+    if (!token) { setLoading(false); return }
+    callApi('bootstrap', token)
+      .then(data => { setMe(data); setLoading(false) })
+      .catch(() => { setToken(null); localStorage.removeItem('google_token'); setLoading(false) })
+  }, [token])
 
-  if (session === undefined || (session && loadingRole)) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#999' }}>
-        Loading...
-      </div>
-    )
-  }
+  const login = useGoogleLogin({
+    onSuccess: (res) => {
+      // res.access_token is for userinfo; for ID token use flow: 'auth-code' or credential response
+      // Simpler path: use GoogleLogin component which gives credential (ID token)
+    },
+    flow: 'implicit',
+  })
+
+  if (loading) return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading...</div>
 
   return (
     <BrowserRouter>
       <Routes>
-        <Route
-          path="/login"
-          element={session ? <Navigate to="/" replace /> : <Login />}
-        />
-        <Route
-          path="/auth/confirm"
-          element={<AuthConfirm />}
-        />
-        <Route
-          path="/"
-          element={
-            !session ? <Navigate to="/login" replace /> :
-            role === 'admin' ? <Navigate to="/admin" replace /> :
-            <Navigate to="/vote" replace />
-          }
-        />
-        <Route
-          path="/vote"
-          element={!session ? <Navigate to="/login" replace /> : <Vote session={session} />}
-        />
-        <Route
-          path="/admin"
-          element={
-            !session ? <Navigate to="/login" replace /> :
-            role !== 'admin' ? <Navigate to="/vote" replace /> :
-            <Admin session={session} />
-          }
-        />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="/login" element={!token ? <Login onToken={t => { setToken(t); localStorage.setItem('google_token', t) }} /> : <Navigate to="/" /> } />
+        <Route path="/" element={token && me ? (me.role === 'admin' ? <Navigate to="/admin" /> : <Navigate to="/vote" />) : <Navigate to="/login" />} />
+        <Route path="/vote" element={token && me ? <Vote token={token} me={me} /> : <Navigate to="/login" />} />
+        <Route path="/admin" element={token && me?.role === 'admin' ? <Admin token={token} me={me} /> : <Navigate to="/vote" />} />
       </Routes>
     </BrowserRouter>
+  )
+}
+
+export default function App() {
+  return (
+    <GoogleOAuthProvider clientId={CLIENT_ID || 'missing'}>
+      <AppInner />
+    </GoogleOAuthProvider>
   )
 }
