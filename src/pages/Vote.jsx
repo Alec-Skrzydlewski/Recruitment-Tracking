@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react'
 import { callApi } from '../lib/api'
+import { usePhotoMap } from '../lib/usePhotoMap'
+import RecruitAvatar from '../components/RecruitAvatar'
 
 export default function Vote({ token, me }) {
   const [data, setData] = useState(null)
   const [eventId, setEventId] = useState('')
   const [loading, setLoading] = useState(true)
+  const photos = usePhotoMap(token, (data && data.recruits || []).map(r => r.photoFileId))
 
   useEffect(() => {
     callApi('getVoteData', token).then(d => {
@@ -54,12 +57,15 @@ export default function Vote({ token, me }) {
             <div className="card"><p style={{ color: '#888' }}>No recruits checked in for this event.</p></div>
           ) : recruits.map(r => {
             const majorLine = [r.major, r.secondMajor].filter(Boolean).join(' / ')
-            const detail = [majorLine, r.gradTerm].filter(Boolean).join(' · ')
+            const detail = [majorLine, r.gradYear].filter(Boolean).join(' · ')
             return (
               <div key={r.id} className="card" style={{ marginBottom: 12 }}>
-                <div style={{ fontWeight: 500, marginBottom: 8 }}>
-                  {r.name}
-                  {detail && <span style={{ color: '#999', fontWeight: 400 }}> · {detail}</span>}
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8 }}>
+                  <RecruitAvatar name={r.name} src={r.photoFileId && photos[r.photoFileId]} />
+                  <div style={{ fontWeight: 500 }}>
+                    {r.name}
+                    {detail && <span style={{ color: '#999', fontWeight: 400 }}> · {detail}</span>}
+                  </div>
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   {[1,2,3,4,5,6,7,8,9,10].map(n => (

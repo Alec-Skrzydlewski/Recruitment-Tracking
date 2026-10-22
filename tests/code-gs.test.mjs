@@ -56,7 +56,7 @@ function makeSs(seed = {}, headerOverrides = {}) {
   const sheets = {};
   const spec = {
     Users: ['email', 'name', 'role', 'active'],
-    Recruits: ['id', 'name', 'major', 'photoUrl', 'secondMajor', 'minor', 'programLevel', 'gradTerm'],
+    Recruits: ['id', 'name', 'major', 'secondMajor', 'gradYear', 'photoFileId', 'photoSource'],
     Events: ['id', 'name'],
     EventRecruits: ['eventId', 'recruitId'],
     Votes: ['eventId', 'recruitId', 'userEmail', 'score', 'timestamp'],
@@ -80,6 +80,153 @@ const tokenUsers = {};
 const lockLog = [];
 let currentSs = null;
 let uuidN = 0;
+
+const driveState = {
+  props: {},
+  files: {},
+  folders: {},
+  blobReads: 0,
+  fileLookups: 0,
+  getFilesCalls: 0,
+  createFolderCalls: 0,
+  sharingCalls: 0,
+  trashCalls: 0,
+  seq: 0,
+};
+
+function resetDrive() {
+  driveState.props = {};
+  driveState.files = {};
+  driveState.folders = {};
+  driveState.blobReads = 0;
+  driveState.fileLookups = 0;
+  driveState.getFilesCalls = 0;
+  driveState.createFolderCalls = 0;
+  driveState.sharingCalls = 0;
+  driveState.trashCalls = 0;
+  driveState.seq = 0;
+  driveState.folders['parent-1'] = {
+    id: 'parent-1', name: 'Chapter', parentIds: [], fileIds: ['test-sheet'], folderIds: [],
+  };
+  driveState.folders['parent-2'] = {
+    id: 'parent-2', name: 'Other', parentIds: [], fileIds: ['test-sheet'], folderIds: [],
+  };
+  driveState.files['test-sheet'] = {
+    id: 'test-sheet',
+    name: 'Recruitment Tracker',
+    mime: 'application/vnd.google-apps.spreadsheet',
+    bytes: [],
+    parentIds: ['parent-1', 'parent-2'],
+  };
+}
+
+function iterator(items) {
+  let index = 0;
+  return {
+    hasNext() { return index < items.length; },
+    next() {
+      if (index >= items.length) throw new Error('no more');
+      return items[index++];
+    },
+  };
+}
+
+function noteSharing() { driveState.sharingCalls += 1; }
+function noteTrash() { driveState.trashCalls += 1; }
+
+function fileApi(record) {
+  return {
+    getId() { return record.id; },
+    getName() { return record.name; },
+    getMimeType() { return record.mime; },
+    getBlob() {
+      driveState.blobReads += 1;
+      return {
+        getBytes() { return record.bytes; },
+        getContentType() { return record.mime || 'image/jpeg'; },
+        getName() { return record.name; },
+      };
+    },
+    getParents() {
+      return iterator(record.parentIds.map(id => folderApi(driveState.folders[id])));
+    },
+    setSharing: noteSharing,
+    addViewer: noteSharing,
+    setTrashed: noteTrash,
+  };
+}
+
+function folderApi(record) {
+  return {
+    getId() { return record.id; },
+    getName() { return record.name; },
+    getFiles() {
+      driveState.getFilesCalls += 1;
+      return iterator(record.fileIds.map(id => fileApi(driveState.files[id])));
+    },
+    getFoldersByName(name) {
+      const kids = record.folderIds
+        .map(id => driveState.folders[id])
+        .filter(folder => folder && folder.name === name);
+      return iterator(kids.map(folderApi));
+    },
+    createFolder(name) {
+      driveState.createFolderCalls += 1;
+      driveState.seq += 1;
+      const id = 'folder-' + driveState.seq;
+      const folder = { id, name, parentIds: [record.id], fileIds: [], folderIds: [] };
+      driveState.folders[id] = folder;
+      record.folderIds.push(id);
+      return folderApi(folder);
+    },
+    createFile(blob) {
+      driveState.seq += 1;
+      const id = 'upload-' + driveState.seq;
+      const file = {
+        id,
+        name: blob.getName(),
+        mime: blob.getContentType(),
+        bytes: blob.getBytes(),
+        parentIds: [record.id],
+      };
+      driveState.files[id] = file;
+      record.fileIds.push(id);
+      return fileApi(file);
+    },
+    setSharing: noteSharing,
+  };
+}
+
+function seedPhotoFolder() {
+  resetDrive();
+  const folder = {
+    id: 'photos-1',
+    name: 'Recruit Photos',
+    parentIds: ['parent-1'],
+    fileIds: [],
+    folderIds: [],
+  };
+  driveState.folders['photos-1'] = folder;
+  driveState.folders['parent-1'].folderIds.push('photos-1');
+  driveState.props.PHOTO_FOLDER_ID = 'photos-1';
+  return folder;
+}
+
+function addDriveFile(parentId, name, mime, bytes) {
+  driveState.seq += 1;
+  const id = 'drv-' + driveState.seq;
+  const file = {
+    id,
+    name,
+    mime: mime || 'image/jpeg',
+    bytes: bytes || [1, 2, 3, 4],
+    parentIds: [parentId],
+  };
+  driveState.files[id] = file;
+  const parent = driveState.folders[parentId];
+  if (parent) parent.fileIds.push(id);
+  return id;
+}
 
 const sandbox = {
   module: { exports: {} },
@@ -124,6 +271,44 @@ const sandbox = {
     getUuid() {
       uuidN += 1;
       return `uuid-${uuidN}`;
+    },
+    newBlob(data, mime, name) {
+      return {
+        getBytes() { return data; },
+        getContentType() { return mime; },
+        getName() { return name; },
+      };
+    },
+    base64Decode(value) {
+      return Array.from(Buffer.from(String(value), 'base64'));
+    },
+    base64Encode(bytes) {
+      return Buffer.from(bytes).toString('base64');
+    },
+  },
+  PropertiesService: {
+    getScriptProperties() {
+      return {
+        getProperty(key) {
+          return Object.prototype.hasOwnProperty.call(driveState.props, key) ? driveState.props[key] : null;
+        },
+        setProperty(key, value) {
+          driveState.props[key] = String(value);
+        },
+      };
+    },
+  },
+  DriveApp: {
+    getFileById(id) {
+      driveState.fileLookups += 1;
+      const record = driveState.files[id];
+      if (!record) throw new Error('file not found');
+      return fileApi(record);
+    },
+    getFolderById(id) {
+      const record = driveState.folders[id];
+      if (!record) throw new Error('folder not found');
+      return folderApi(record);
     },
   },
 };
@@ -253,33 +438,38 @@ test('first sign-in becomes admin and returns email', () => {
   assert.deepEqual(plain(me), { email: 'first@chapter.org', name: 'First Person', role: 'admin' });
 });
 
-const RECRUIT_HEADER = ['id', 'name', 'major', 'photoUrl', 'secondMajor', 'minor', 'programLevel', 'gradTerm'];
+const RECRUIT_HEADER = ['id', 'name', 'major', 'secondMajor', 'gradYear', 'photoFileId', 'photoSource'];
+const OLD_RECRUIT_HEADER = ['id', 'name', 'major', 'photoUrl', 'secondMajor', 'minor', 'programLevel', 'gradTerm'];
 
-test('ensureSheets appends missing Recruits headers without reordering or deleting', () => {
-  const ss = makeSs(
-    { Recruits: [['Ada', 'r1', 'Finance (BSBA)', 'http://photo']] },
-    { Recruits: ['name', 'id', 'major', 'photoUrl'] },
-  );
+test('ensureSheets rewrites an empty Recruits header and leaves rows that have data', () => {
+  const ss = makeSs({}, { Recruits: OLD_RECRUIT_HEADER });
   api.ensureSheets(ss);
   const sheet = ss.getSheetByName('Recruits');
   let values = sheet.getDataRange().getValues();
-  assert.deepEqual(values[0], ['name', 'id', 'major', 'photoUrl', 'secondMajor', 'minor', 'programLevel', 'gradTerm']);
-  assert.deepEqual(values[1], ['Ada', 'r1', 'Finance (BSBA)', 'http://photo']);
+  assert.deepEqual(values[0], [...RECRUIT_HEADER, '']);
 
+  const before = JSON.parse(JSON.stringify(values));
   api.ensureSheets(ss);
   values = sheet.getDataRange().getValues();
-  assert.deepEqual(values[0], ['name', 'id', 'major', 'photoUrl', 'secondMajor', 'minor', 'programLevel', 'gradTerm']);
-  assert.equal(values.length, 2);
-  assert.deepEqual(values[1], ['Ada', 'r1', 'Finance (BSBA)', 'http://photo']);
+  assert.deepEqual(values, before);
 
-  const partial = makeSs(
-    { Recruits: [['r1', 'Ada', 'Marketing (BSBA)', '', 'Economics (BA)', 'keep']] },
-    { Recruits: ['id', 'name', 'major', 'photoUrl', 'secondMajor', 'legacy'] },
+  const blanks = makeSs(
+    { Recruits: [[' ', '', '', '', '', '', '', '']] },
+    { Recruits: OLD_RECRUIT_HEADER },
   );
-  api.ensureSheets(partial);
-  const migrated = partial.getSheetByName('Recruits').getDataRange().getValues();
-  assert.deepEqual(migrated[0], ['id', 'name', 'major', 'photoUrl', 'secondMajor', 'legacy', 'minor', 'programLevel', 'gradTerm']);
-  assert.deepEqual(migrated[1], ['r1', 'Ada', 'Marketing (BSBA)', '', 'Economics (BA)', 'keep']);
+  api.ensureSheets(blanks);
+  const blankHeader = blanks.getSheetByName('Recruits').getDataRange().getValues()[0];
+  assert.deepEqual(blankHeader.slice(0, RECRUIT_HEADER.length), RECRUIT_HEADER);
+  assert.ok(blankHeader.slice(RECRUIT_HEADER.length).every(cell => cell === ''));
+
+  const kept = makeSs(
+    { Recruits: [['r1', 'Ada', 'Finance (BSBA)', 'http://photo', 'Economics (BA)', 'Accounting', 'Undergraduate', 'Spring 2027']] },
+    { Recruits: OLD_RECRUIT_HEADER },
+  );
+  api.ensureSheets(kept);
+  const keptValues = kept.getSheetByName('Recruits').getDataRange().getValues();
+  assert.deepEqual(keptValues[0], OLD_RECRUIT_HEADER);
+  assert.equal(keptValues[1][1], 'Ada');
 });
 
 test('ensureSheets creates a Recruits sheet with the extended header', () => {
@@ -304,11 +494,8 @@ test('addRecruit writes trimmed fields in header order and reads back', () => {
   const created = api.addRecruit(ss, {
     name: '  Ada Lovelace ',
     major: ' Finance (BSBA) ',
-    photoUrl: ' https://example.com/a.jpg ',
     secondMajor: ' Economics (BA) ',
-    minor: ' Accounting ',
-    programLevel: ' Undergraduate ',
-    gradTerm: ' Spring 2027 ',
+    gradYear: ' 2027 ',
   });
   let values = ss.getSheetByName('Recruits').getDataRange().getValues();
   assert.deepEqual(values[0], RECRUIT_HEADER);
@@ -316,58 +503,53 @@ test('addRecruit writes trimmed fields in header order and reads back', () => {
     created.id,
     'Ada Lovelace',
     'Finance (BSBA)',
-    'https://example.com/a.jpg',
     'Economics (BA)',
-    'Accounting',
-    'Undergraduate',
-    'Spring 2027',
+    '2027',
+    '',
+    '',
   ]);
 
-  const blank = api.addRecruit(ss, { name: '  Bea  ', photoUrl: '   ', secondMajor: '  ' });
+  const blank = api.addRecruit(ss, { name: '  Bea  ', secondMajor: '  ', gradYear: '   ' });
   values = ss.getSheetByName('Recruits').getDataRange().getValues();
-  assert.deepEqual(values[2], [blank.id, 'Bea', '', '', '', '', '', '']);
+  assert.deepEqual(values[2], [blank.id, 'Bea', '', '', '', '', '']);
 
   const shifted = makeSs(
-    { Recruits: [['Ada', 'r1', 'Finance (BSBA)', 'http://photo']] },
-    { Recruits: ['name', 'id', 'major', 'photoUrl'] },
+    { Recruits: [['Ada', 'r1', 'Finance (BSBA)']] },
+    { Recruits: ['name', 'id', 'major', 'secondMajor', 'gradYear', 'photoFileId', 'photoSource'] },
   );
   api.ensureSheets(shifted);
   const extra = api.addRecruit(shifted, {
     name: 'Cyd',
     major: 'Marketing (BSBA)',
-    minor: 'Statistics',
-    programLevel: 'MBA',
-    gradTerm: 'Fall 2030',
+    secondMajor: 'Economics (BA)',
+    gradYear: '2030',
   });
   const shiftedRows = shifted.getSheetByName('Recruits').getDataRange().getValues();
+  assert.deepEqual(shiftedRows[0], ['name', 'id', 'major', 'secondMajor', 'gradYear', 'photoFileId', 'photoSource']);
   assert.deepEqual(shiftedRows[2], [
     'Cyd',
     extra.id,
     'Marketing (BSBA)',
+    'Economics (BA)',
+    '2030',
     '',
     '',
-    'Statistics',
-    'MBA',
-    'Fall 2030',
   ]);
 
   const admin = plain(api.getAdminData(ss));
   const ada = admin.recruits.find(recruit => recruit.id === created.id);
   assert.equal(ada.major, 'Finance (BSBA)');
-  assert.equal(ada.photoUrl, 'https://example.com/a.jpg');
   assert.equal(ada.secondMajor, 'Economics (BA)');
-  assert.equal(ada.minor, 'Accounting');
-  assert.equal(ada.programLevel, 'Undergraduate');
-  assert.equal(ada.gradTerm, 'Spring 2027');
+  assert.equal(ada.gradYear, '2027');
+  assert.equal(ada.photoFileId, '');
+  assert.equal(ada.photoSource, '');
   assert.equal(admin.recruits.find(recruit => recruit.id === blank.id).secondMajor, '');
 
   const vote = plain(api.getVoteData(ss, { email: 'Ada@chapter.org' }));
   const voted = vote.recruits.find(recruit => recruit.id === created.id);
   assert.equal(voted.major, 'Finance (BSBA)');
   assert.equal(voted.secondMajor, 'Economics (BA)');
-  assert.equal(voted.minor, 'Accounting');
-  assert.equal(voted.programLevel, 'Undergraduate');
-  assert.equal(voted.gradTerm, 'Spring 2027');
+  assert.equal(voted.gradYear, '2027');
 });
 
 test('unknown user gets the unauthorized message', () => {
@@ -378,4 +560,209 @@ test('unknown user gets the unauthorized message', () => {
   const result = post('bootstrap', 'other');
   assert.deepEqual(result, { error: 'Not authorized. Ask an admin to add you.' });
   assert.equal(usersOf(currentSs).length, 1);
+});
+
+function chapterSs(recruitRows) {
+  return makeSs({
+    Users: [
+      ['ada@chapter.org', 'Ada', 'admin', 'yes'],
+      ['bea@chapter.org', 'Bea', 'brother', 'yes'],
+    ],
+    Recruits: recruitRows || [],
+  });
+}
+
+test('addRecruit stores an optional upload and deleteRecruit leaves the Drive file', () => {
+  resetDrive();
+  const ss = chapterSs();
+  const bytes = Buffer.from('grace-photo');
+  const created = api.addRecruit(ss, {
+    name: 'Grace/Hopper',
+    major: 'Marketing (BSBA)',
+    gradYear: '2028',
+    photoDataBase64: bytes.toString('base64'),
+    photoMimeType: 'image/jpeg',
+  });
+  assert.equal(created.photoSource, 'upload');
+  const file = driveState.files[created.photoFileId];
+  assert.equal(file.name, 'Grace Hopper.jpg');
+  assert.equal(file.mime, 'image/jpeg');
+  assert.equal(Buffer.from(file.bytes).toString(), 'grace-photo');
+  assert.equal(driveState.sharingCalls, 0);
+  assert.equal(driveState.trashCalls, 0);
+  const row = ss.getSheetByName('Recruits').getDataRange().getValues()[1];
+  assert.equal(row[5], created.photoFileId);
+  assert.equal(row[6], 'upload');
+
+  api.deleteRecruit(ss, { id: created.id });
+  assert.equal(ss.getSheetByName('Recruits').getLastRow(), 1);
+  assert.ok(driveState.files[created.photoFileId]);
+  assert.equal(driveState.trashCalls, 0);
+
+  assert.throws(
+    () => api.addRecruit(ss, { name: 'Big', major: 'X', photoDataBase64: 'a'.repeat(500001) }),
+    /too large/,
+  );
+  assert.equal(ss.getSheetByName('Recruits').getLastRow(), 1);
+});
+
+test('uploadPhoto is admin-only and getPhotos will not read arbitrary files', () => {
+  seedPhotoFolder();
+  const ss = chapterSs([['r1', 'Ada Lovelace', 'Finance (BSBA)', '', '2027', '', '']]);
+  const payload = Buffer.from('ada-photo').toString('base64');
+  const uploaded = api.uploadPhoto(ss, { recruitId: 'r1', dataBase64: payload, mimeType: 'image/jpeg' });
+  assert.equal(uploaded.photoSource, 'upload');
+  assert.equal(driveState.files[uploaded.photoFileId].name, 'Ada Lovelace.jpg');
+  const row = ss.getSheetByName('Recruits').getDataRange().getValues()[1];
+  assert.equal(row[5], uploaded.photoFileId);
+  assert.equal(row[6], 'upload');
+
+  const missing = api.uploadPhoto(ss, { recruitId: 'nope', dataBase64: payload });
+  assert.equal(missing.error, 'Recruit not found');
+
+  const loose = addDriveFile('photos-1', 'mystery.png', 'image/png', [9, 8, 7]);
+  driveState.files.outside = {
+    id: 'outside',
+    name: 'secret.png',
+    mime: 'image/png',
+    bytes: [5],
+    parentIds: ['parent-2'],
+  };
+  driveState.blobReads = 0;
+  driveState.fileLookups = 0;
+
+  const brother = api.getPhotos(ss, { email: 'bea@chapter.org' }, {
+    ids: [uploaded.photoFileId, loose, 'outside', uploaded.photoFileId],
+  });
+  assert.deepEqual(Object.keys(brother.photos), [uploaded.photoFileId]);
+  assert.ok(brother.photos[uploaded.photoFileId].startsWith('data:image/jpeg;base64,'));
+  assert.equal(Buffer.from(brother.photos[uploaded.photoFileId].split(',')[1], 'base64').toString(), 'ada-photo');
+  assert.equal(driveState.blobReads, 1);
+
+  const blocked = api.getPhotos(ss, { email: 'bea@chapter.org' }, { ids: [loose, 'outside'] });
+  assert.deepEqual(plain(blocked.photos), {});
+  assert.equal(driveState.blobReads, 1);
+
+  const stranger = api.getPhotos(ss, { email: 'stranger@chapter.org' }, { ids: [uploaded.photoFileId] });
+  assert.equal(stranger.error, 'Not authorized');
+  assert.equal(driveState.blobReads, 1);
+
+  const admin = api.getPhotos(ss, { email: 'ada@chapter.org' }, { ids: [loose] });
+  assert.ok(admin.photos[loose].startsWith('data:image/png;base64,'));
+
+  const ids = [];
+  const recruitRows = [['r1', 'Ada Lovelace', 'Finance (BSBA)', '', '2027', uploaded.photoFileId, 'upload']];
+  for (let i = 0; i < 24; i++) {
+    const id = addDriveFile('photos-1', 'n' + i + '.jpg', 'image/jpeg', [i]);
+    ids.push(id);
+    recruitRows.push(['r' + i, 'Name ' + i, '', '', '', id, 'upload']);
+  }
+  const many = chapterSs(recruitRows);
+  driveState.blobReads = 0;
+  const capped = api.getPhotos(many, { email: 'bea@chapter.org' }, { ids: ids });
+  assert.equal(Object.keys(capped.photos).length, 20);
+  assert.equal(driveState.blobReads, 20);
+  assert.equal(capped.photos[ids[20]], undefined);
+
+  tokenUsers.bea = { email: 'bea@chapter.org', email_verified: 'true', name: 'Bea' };
+  currentSs = ss;
+  const denied = post('uploadPhoto', 'bea', { recruitId: 'r1', dataBase64: payload, mimeType: 'image/jpeg' });
+  assert.equal(denied.error, 'Admin only');
+  const syncDenied = post('syncPhotoFolder', 'bea');
+  assert.equal(syncDenied.error, 'Admin only');
+});
+
+test('syncPhotoFolder auto-links a clear typo, reviews Smith versus Smyth, and skips uploads', () => {
+  const folder = seedPhotoFolder();
+  const ss = chapterSs([
+    ['r-jane', 'Jane Smith', 'Finance (BSBA)', '', '2027', '', ''],
+    ['r-smyth', 'Jane Smyth', 'Marketing (BSBA)', '', '2028', '', ''],
+    ['r-ada', 'Ada Lovelace', 'Finance (BSBA)', '', '2027', 'keep-me', 'upload'],
+  ]);
+  addDriveFile(folder.id, 'Jane Smtih.jpg');
+  addDriveFile(folder.id, 'Ada Lovelace.jpg');
+  addDriveFile(folder.id, 'notes.pdf', 'application/pdf', [1]);
+  driveState.files['keep-me'] = {
+    id: 'keep-me', name: 'Ada Lovelace.jpg', mime: 'image/jpeg', bytes: [4], parentIds: [folder.id],
+  };
+  folder.fileIds.push('keep-me');
+
+  driveState.blobReads = 0;
+  driveState.getFilesCalls = 0;
+  const first = plain(api.syncPhotoFolder(ss));
+  assert.equal(driveState.blobReads, 0);
+  assert.equal(driveState.getFilesCalls, 1);
+  assert.equal(driveState.sharingCalls, 0);
+  assert.equal(first.linked.length, 0);
+  const janeFile = first.unmatched.find(item => item.fileName === 'Jane Smtih.jpg');
+  assert.ok(janeFile);
+  assert.deepEqual(janeFile.suggestions.map(item => item.name).sort(), ['Jane Smith', 'Jane Smyth']);
+  assert.equal(first.unmatched.some(item => item.fileName === 'notes.pdf'), false);
+  assert.equal(first.unmatched.some(item => item.fileId === 'keep-me'), false);
+  const ada = ss.getSheetByName('Recruits').getDataRange().getValues().find(row => row[0] === 'r-ada');
+  assert.equal(ada[5], 'keep-me');
+  assert.equal(ada[6], 'upload');
+
+  const clear = chapterSs([['r-jane', 'Jane Smith', 'Finance (BSBA)', '', '2027', '', '']]);
+  const clearFolder = seedPhotoFolder();
+  const typoId = addDriveFile(clearFolder.id, 'Jane Smtih.jpg');
+  driveState.getFilesCalls = 0;
+  const linked = plain(api.syncPhotoFolder(clear));
+  assert.equal(linked.linked.length, 1);
+  assert.equal(linked.linked[0].recruitId, 'r-jane');
+  assert.equal(linked.linked[0].fileId, typoId);
+  assert.ok(linked.linked[0].score >= 0.85);
+  const jane = clear.getSheetByName('Recruits').getDataRange().getValues()[1];
+  assert.equal(jane[5], typoId);
+  assert.equal(jane[6], 'folder');
+  assert.equal(driveState.getFilesCalls, 1);
+
+  const again = api.syncPhotoFolder(clear);
+  assert.equal(again.linked.length, 0);
+  assert.equal(again.unmatched.length, 0);
+  assert.equal(driveState.createFolderCalls, 0);
+});
+
+test('linkPhoto attaches a folder image and refuses files outside it or recruits who have a photo', () => {
+  const folder = seedPhotoFolder();
+  const ss = chapterSs([
+    ['r-jane', 'Jane Smith', 'Finance (BSBA)', '', '2027', '', ''],
+    ['r-ada', 'Ada Lovelace', 'Finance (BSBA)', '', '2027', 'old', 'upload'],
+  ]);
+  const fileId = addDriveFile(folder.id, 'portrait.png', 'image/png', [3, 3]);
+  const linked = api.linkPhoto(ss, { fileId, recruitId: 'r-jane' });
+  assert.deepEqual(plain(linked), { ok: true, photoFileId: fileId, photoSource: 'folder' });
+  const jane = ss.getSheetByName('Recruits').getDataRange().getValues().find(row => row[0] === 'r-jane');
+  assert.equal(jane[5], fileId);
+  assert.equal(jane[6], 'folder');
+
+  const again = api.linkPhoto(ss, { fileId, recruitId: 'r-jane' });
+  assert.equal(again.error, 'Recruit already has a photo');
+  const blocked = api.linkPhoto(ss, { fileId, recruitId: 'r-ada' });
+  assert.equal(blocked.error, 'Recruit already has a photo');
+  assert.equal(ss.getSheetByName('Recruits').getDataRange().getValues().find(row => row[0] === 'r-ada')[5], 'old');
+
+  driveState.files.outside = {
+    id: 'outside', name: 'Jane.jpg', mime: 'image/jpeg', bytes: [1], parentIds: ['parent-2'],
+  };
+  const outside = api.linkPhoto(ss, { fileId: 'outside', recruitId: 'r-jane' });
+  assert.equal(outside.error, 'Photo is not in the Recruit Photos folder');
+  assert.equal(driveState.trashCalls, 0);
+  assert.equal(driveState.sharingCalls, 0);
+});
+
+test('getPhotoFolder creates Recruit Photos beside the spreadsheet and then reuses the id', () => {
+  resetDrive();
+  const ss = chapterSs();
+  const created = plain(api.syncPhotoFolder(ss));
+  assert.deepEqual(created, { linked: [], unmatched: [] });
+  assert.equal(driveState.createFolderCalls, 1);
+  const folder = Object.values(driveState.folders).find(item => item.name === 'Recruit Photos');
+  assert.ok(folder);
+  assert.deepEqual(folder.parentIds, ['parent-1']);
+  assert.equal(driveState.props.PHOTO_FOLDER_ID, folder.id);
+  const lookups = driveState.fileLookups;
+  api.syncPhotoFolder(ss);
+  assert.equal(driveState.createFolderCalls, 1);
+  assert.equal(driveState.fileLookups, lookups);
 });

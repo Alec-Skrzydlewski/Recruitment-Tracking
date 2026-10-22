@@ -23,6 +23,10 @@ function doPost(e) {
       case 'getAdminData': result = requireAdmin(ss, user) && getAdminData(ss); break;
       case 'addRecruit': result = requireAdmin(ss, user) && addRecruit(ss, body); break;
       case 'deleteRecruit': result = requireAdmin(ss, user) && deleteRecruit(ss, body); break;
+      case 'uploadPhoto': result = requireAdmin(ss, user) && uploadPhoto(ss, body); break;
+      case 'getPhotos': result = getPhotos(ss, user, body); break;
+      case 'syncPhotoFolder': result = requireAdmin(ss, user) && syncPhotoFolder(ss); break;
+      case 'linkPhoto': result = requireAdmin(ss, user) && linkPhoto(ss, body); break;
       case 'addEvent': result = requireAdmin(ss, user) && addEvent(ss, body); break;
       case 'deleteEvent': result = requireAdmin(ss, user) && deleteEvent(ss, body); break;
       case 'toggleAttendance': result = requireAdmin(ss, user) && toggleAttendance(ss, body); break;
@@ -64,15 +68,17 @@ function withLock(fn) {
   }
 }
 
+const RECRUIT_COLUMNS = ['id', 'name', 'major', 'secondMajor', 'gradYear', 'photoFileId', 'photoSource'];
+
 function ensureSheets(ss) {
   const needed = {
     Users: ['email', 'name', 'role', 'active'],
-    Recruits: ['id', 'name', 'major', 'photoUrl', 'secondMajor', 'minor', 'programLevel', 'gradTerm'],
     Events: ['id', 'name'],
     EventRecruits: ['eventId', 'recruitId'],
     Votes: ['eventId', 'recruitId', 'userEmail', 'score', 'timestamp'],
     Notes: ['recruitId', 'content', 'updatedAt']
   };
+  ensureRecruitColumns(ss);
   Object.keys(needed).forEach(name => {
     let sheet = ss.getSheetByName(name);
     if (!sheet) {
@@ -83,6 +89,51 @@ function ensureSheets(ss) {
     // Append missing header cells. Never reorder or delete existing columns.
     appendMissingHeaders(sheet, needed[name]);
   });
+}
+
+function meaningfulHeader(header) {
+  const copy = header.slice();
+  while (copy.length && copy[copy.length - 1] === '') copy.pop();
+  return copy;
+}
+
+function sameHeader(header, columns) {
+  const got = meaningfulHeader(header);
+  if (got.length !== columns.length) return false;
+  for (let i = 0; i < columns.length; i++) {
+    if (got[i] !== columns[i]) return false;
+  }
+  return true;
+}
+
+// Empty recruit sheets (the tracker is wiped) get the current columns.
+// A sheet that still has recruit rows is left alone.
+function ensureRecruitColumns(ss) {
+  let sheet = ss.getSheetByName('Recruits');
+  if (!sheet) {
+    sheet = ss.insertSheet('Recruits');
+    sheet.appendRow(RECRUIT_COLUMNS);
+    return;
+  }
+  if (sheet.getLastRow() < 1) {
+    sheet.appendRow(RECRUIT_COLUMNS);
+    return;
+  }
+  const values = sheet.getDataRange().getValues();
+  const header = values[0].map(cell => String(cell == null ? '' : cell).trim());
+  if (sameHeader(header, RECRUIT_COLUMNS)) return;
+  for (let r = 1; r < values.length; r++) {
+    for (let c = 0; c < values[r].length; c++) {
+      if (cellNonEmpty(values[r][c])) return;
+    }
+  }
+  const width = Math.max(sheet.getLastColumn(), RECRUIT_COLUMNS.length);
+  for (let i = 0; i < RECRUIT_COLUMNS.length; i++) {
+    sheet.getRange(1, i + 1).setValue(RECRUIT_COLUMNS[i]);
+  }
+  if (width > RECRUIT_COLUMNS.length) {
+    sheet.getRange(1, RECRUIT_COLUMNS.length + 1, 1, width - RECRUIT_COLUMNS.length).clearContent();
+  }
 }
 
 function appendMissingHeaders(sheet, columns) {
@@ -246,15 +297,25 @@ function addRecruit(ss, body) {
       id: id,
       name: textField(source.name),
       major: textField(source.major),
-      photoUrl: textField(source.photoUrl),
       secondMajor: textField(source.secondMajor),
-      minor: textField(source.minor),
-      programLevel: textField(source.programLevel),
-      gradTerm: textField(source.gradTerm)
+      gradYear: textField(source.gradYear),
+      photoFileId: '',
+      photoSource: ''
     };
+    const rawPhoto = source.photoDataBase64;
+    if (rawPhoto != null && textField(rawPhoto) !== '') {
+      const bytes = decodePhoto(rawPhoto);
+      values.photoFileId = savePhotoFile(ss, values.name, bytes);
+      values.photoSource = 'upload';
+    }
     const row = header.map(key => Object.prototype.hasOwnProperty.call(values, key) ? values[key] : '');
     sheet.appendRow(row);
-    return { id: id };
+    const result = { id: id };
+    if (values.photoFileId) {
+      result.photoFileId = values.photoFileId;
+      result.photoSource = 'upload';
+    }
+    return result;
   });
 }
 
@@ -384,4 +445,424 @@ function wipeCycle(ss) {
   });
 }
 
-if (typeof module !== 'undefined') { module.exports = { doPost, rowsToObjects, castVote, manageUser, bootstrap, getMe, saveNote, getAdminData, getVoteData, addRecruit, ensureSheets }; }
+// Photo filename matching. Keep identical to src/lib/photoMatch.js.
+const AUTO_LINK_SCORE = 0.85;
+const AUTO_LINK_MARGIN = 0.1;
+const REVIEW_SCORE = 0.6;
+const MAX_SUGGESTIONS = 3;
+
+function normalizeName(filename) {
+  let name = String(filename == null ? '' : filename).trim();
+  name = name.replace(/\.[A-Za-z0-9]{1,8}$/, '');
+  let previous = name;
+  do {
+    previous = name;
+    name = name.replace(/\s*\(\d+\)\s*$/, '');
+    name = name.replace(/\s*-\s*copy\s*$/i, '');
+  } while (name !== previous);
+  const comma = name.match(/^\s*([^,]+),\s*([^,]+?)\s*$/);
+  if (comma) name = (comma[2] + ' ' + comma[1]).trim();
+  name = name.toLowerCase();
+  name = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  name = name.replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return name;
+}
+
+// Adjacent transposition counts as one edit so "Smtih" stays within the auto-link band.
+function levenshtein(a, b) {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const rows = new Array(m + 1);
+  for (let i = 0; i <= m; i++) {
+    rows[i] = new Array(n + 1);
+    rows[i][0] = i;
+  }
+  for (let j = 0; j <= n; j++) rows[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      let best = rows[i - 1][j] + 1;
+      const del = rows[i][j - 1] + 1;
+      if (del < best) best = del;
+      const sub = rows[i - 1][j - 1] + cost;
+      if (sub < best) best = sub;
+      if (
+        i > 1 && j > 1 &&
+        a.charCodeAt(i - 1) === b.charCodeAt(j - 2) &&
+        a.charCodeAt(i - 2) === b.charCodeAt(j - 1)
+      ) {
+        const swap = rows[i - 2][j - 2] + 1;
+        if (swap < best) best = swap;
+      }
+      rows[i][j] = best;
+    }
+  }
+  return rows[m][n];
+}
+
+function tokenKey(normalized) {
+  return normalized.split(' ').filter(Boolean).sort().join(' ');
+}
+
+function ratio(a, b) {
+  if (a === b) return 1;
+  const maxLen = Math.max(a.length, b.length);
+  if (maxLen === 0) return 1;
+  return 1 - levenshtein(a, b) / maxLen;
+}
+
+function similarity(a, b) {
+  const left = normalizeName(a);
+  const right = normalizeName(b);
+  const direct = ratio(left, right);
+  const tokens = ratio(tokenKey(left), tokenKey(right));
+  return direct > tokens ? direct : tokens;
+}
+
+function fieldText(value) {
+  if (value == null) return '';
+  return String(value).trim();
+}
+
+function hasPhoto(recruit) {
+  return !!(fieldText(recruit.photoFileId) || fieldText(recruit.photoSource));
+}
+
+function planPhotoLinks(files, recruits) {
+  const people = (recruits || []).map(recruit => ({
+    id: fieldText(recruit && recruit.id),
+    name: fieldText(recruit && recruit.name),
+    photoFileId: fieldText(recruit && recruit.photoFileId),
+    photoSource: fieldText(recruit && recruit.photoSource),
+  })).filter(recruit => recruit.id);
+
+  const takenFiles = new Set(people.map(recruit => recruit.photoFileId).filter(Boolean));
+  const pending = [];
+  const seenFiles = new Set();
+  (files || []).forEach(file => {
+    const fileId = fieldText(file && file.fileId);
+    if (!fileId || seenFiles.has(fileId) || takenFiles.has(fileId)) return;
+    seenFiles.add(fileId);
+    pending.push({
+      fileId: fileId,
+      fileName: file && file.fileName != null ? String(file.fileName) : '',
+    });
+  });
+
+  const takenRecruits = new Set(people.filter(hasPhoto).map(recruit => recruit.id));
+  const decisions = pending.map(file => {
+    const ranked = people.map(recruit => ({
+      recruitId: recruit.id,
+      name: recruit.name,
+      score: similarity(file.fileName, recruit.name),
+    })).sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      if (a.recruitId < b.recruitId) return -1;
+      if (a.recruitId > b.recruitId) return 1;
+      return 0;
+    });
+    const suggestions = [];
+    for (let i = 0; i < ranked.length && suggestions.length < MAX_SUGGESTIONS; i++) {
+      if (ranked[i].score >= REVIEW_SCORE) suggestions.push(ranked[i]);
+    }
+    const best = ranked[0] || null;
+    const secondScore = ranked.length > 1 ? ranked[1].score : 0;
+    const margin = best ? best.score - secondScore : 0;
+    return { file: file, best: best, margin: margin, suggestions: suggestions };
+  });
+
+  const auto = decisions.filter(item => (
+    item.best &&
+    item.best.score >= AUTO_LINK_SCORE &&
+    item.margin >= AUTO_LINK_MARGIN &&
+    !takenRecruits.has(item.best.recruitId)
+  ));
+  auto.sort((a, b) => {
+    if (b.best.score !== a.best.score) return b.best.score - a.best.score;
+    if (a.file.fileName < b.file.fileName) return -1;
+    if (a.file.fileName > b.file.fileName) return 1;
+    return 0;
+  });
+
+  const linked = [];
+  const linkedFiles = new Set();
+  auto.forEach(item => {
+    const recruitId = item.best.recruitId;
+    if (takenRecruits.has(recruitId)) return;
+    takenRecruits.add(recruitId);
+    linkedFiles.add(item.file.fileId);
+    linked.push({
+      fileId: item.file.fileId,
+      fileName: item.file.fileName,
+      recruitId: recruitId,
+      name: item.best.name,
+      score: item.best.score,
+    });
+  });
+
+  const unmatched = [];
+  decisions.forEach(item => {
+    if (linkedFiles.has(item.file.fileId)) return;
+    const bestScore = item.best ? item.best.score : 0;
+    unmatched.push({
+      fileId: item.file.fileId,
+      fileName: item.file.fileName,
+      suggestions: bestScore >= REVIEW_SCORE ? item.suggestions : [],
+    });
+  });
+
+  return { linked: linked, unmatched: unmatched };
+}
+
+const PHOTO_FOLDER_NAME = 'Recruit Photos';
+const PHOTO_FOLDER_PROP = 'PHOTO_FOLDER_ID';
+const PHOTO_FETCH_LIMIT = 20;
+
+function getPhotoFolder(ss) {
+  const props = PropertiesService.getScriptProperties();
+  const cached = props.getProperty(PHOTO_FOLDER_PROP);
+  if (cached) {
+    try {
+      const existing = DriveApp.getFolderById(cached);
+      if (existing && existing.getName() === PHOTO_FOLDER_NAME) return existing;
+    } catch (err) {}
+  }
+  const file = DriveApp.getFileById(ss.getId());
+  const parents = file.getParents();
+  if (!parents.hasNext()) throw new Error('Spreadsheet has no parent folder');
+  const parent = parents.next();
+  const found = parent.getFoldersByName(PHOTO_FOLDER_NAME);
+  const folder = found.hasNext() ? found.next() : parent.createFolder(PHOTO_FOLDER_NAME);
+  props.setProperty(PHOTO_FOLDER_PROP, folder.getId());
+  return folder;
+}
+
+function listImageFiles(folder) {
+  const files = [];
+  const iterator = folder.getFiles();
+  while (iterator.hasNext()) {
+    const file = iterator.next();
+    const mime = String(file.getMimeType() || '');
+    if (mime.indexOf('image/') !== 0) continue;
+    files.push({ fileId: file.getId(), fileName: file.getName() });
+  }
+  return files;
+}
+
+function decodePhoto(dataBase64) {
+  let raw = String(dataBase64 == null ? '' : dataBase64).trim();
+  const marker = raw.indexOf('base64,');
+  if (marker !== -1) raw = raw.slice(marker + 'base64,'.length);
+  raw = raw.replace(/\s/g, '');
+  if (!raw) throw new Error('Missing photo data');
+  if (raw.length > 500000) throw new Error('Photo is too large');
+  return Utilities.base64Decode(raw);
+}
+
+function savePhotoFile(ss, recruitName, bytes) {
+  const folder = getPhotoFolder(ss);
+  const safe = textField(recruitName).replace(/[\\/]/g, ' ').replace(/\s+/g, ' ').trim() || 'Recruit';
+  const blob = Utilities.newBlob(bytes, 'image/jpeg', safe + '.jpg');
+  const file = folder.createFile(blob);
+  return file.getId();
+}
+
+function headerOf(values) {
+  return (values[0] || []).map(cell => String(cell == null ? '' : cell).trim());
+}
+
+function columnIndex(header, name) {
+  return header.indexOf(name);
+}
+
+function recruitRow(values, header, recruitId) {
+  const idCol = columnIndex(header, 'id');
+  const nameCol = columnIndex(header, 'name');
+  const fileCol = columnIndex(header, 'photoFileId');
+  const sourceCol = columnIndex(header, 'photoSource');
+  if (idCol < 0 || fileCol < 0 || sourceCol < 0) throw new Error('Recruits sheet is missing photo columns');
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][idCol]) === String(recruitId)) {
+      return {
+        row: i,
+        name: nameCol < 0 ? '' : textField(values[i][nameCol]),
+        photoFileId: textField(values[i][fileCol]),
+        photoSource: textField(values[i][sourceCol]),
+        fileCol: fileCol,
+        sourceCol: sourceCol,
+      };
+    }
+  }
+  return null;
+}
+
+function uploadPhoto(ss, body) {
+  return withLock(() => {
+    const recruitId = textField(body && body.recruitId);
+    if (!recruitId) return { error: 'Missing recruit' };
+    const bytes = decodePhoto(body && body.dataBase64);
+    const sheet = getSheet(ss, 'Recruits');
+    const values = sheet.getDataRange().getValues();
+    const located = recruitRow(values, headerOf(values), recruitId);
+    if (!located) return { error: 'Recruit not found' };
+    const fileId = savePhotoFile(ss, located.name, bytes);
+    sheet.getRange(located.row + 1, located.fileCol + 1).setValue(fileId);
+    sheet.getRange(located.row + 1, located.sourceCol + 1).setValue('upload');
+    return { ok: true, photoFileId: fileId, photoSource: 'upload' };
+  });
+}
+
+function fileInPhotoFolder(file, folder) {
+  if (!file || !folder) return false;
+  const mime = String(file.getMimeType() || '');
+  if (mime.indexOf('image/') !== 0) return false;
+  const parents = file.getParents();
+  const folderId = folder.getId();
+  while (parents.hasNext()) {
+    if (parents.next().getId() === folderId) return true;
+  }
+  return false;
+}
+
+function openDriveFile(fileId) {
+  try {
+    return DriveApp.getFileById(fileId);
+  } catch (err) {
+    return null;
+  }
+}
+
+function getPhotos(ss, user, body) {
+  const me = getMe(ss, user);
+  if (me.error) return me;
+  const requested = Array.isArray(body && body.ids) ? body.ids : [];
+  const ids = [];
+  const seen = {};
+  for (let i = 0; i < requested.length && ids.length < PHOTO_FETCH_LIMIT; i++) {
+    const id = textField(requested[i]);
+    if (!id || seen[id]) continue;
+    seen[id] = true;
+    ids.push(id);
+  }
+  if (!ids.length) return { photos: {} };
+  const recruits = rowsToObjects(getSheet(ss, 'Recruits'));
+  const allowed = {};
+  recruits.forEach(recruit => {
+    const id = textField(recruit.photoFileId);
+    if (id) allowed[id] = true;
+  });
+  const isAdmin = me.role === 'admin';
+  let folder = null;
+  const photos = {};
+  ids.forEach(id => {
+    let file = null;
+    if (allowed[id]) {
+      file = openDriveFile(id);
+    } else if (isAdmin) {
+      if (!folder) {
+        try { folder = getPhotoFolder(ss); } catch (err) { folder = null; }
+      }
+      file = openDriveFile(id);
+      if (!fileInPhotoFolder(file, folder)) file = null;
+    }
+    if (!file) return;
+    try {
+      const blob = file.getBlob();
+      const mime = blob.getContentType() || file.getMimeType() || 'image/jpeg';
+      photos[id] = 'data:' + mime + ';base64,' + Utilities.base64Encode(blob.getBytes());
+    } catch (err) {}
+  });
+  return { photos: photos };
+}
+
+function recruitsFromValues(values) {
+  const header = headerOf(values);
+  const recruits = [];
+  for (let r = 1; r < values.length; r++) {
+    const row = values[r];
+    let any = false;
+    const obj = {};
+    for (let c = 0; c < header.length; c++) {
+      if (!header[c]) continue;
+      obj[header[c]] = row[c];
+      if (cellNonEmpty(row[c])) any = true;
+    }
+    if (any) recruits.push(obj);
+  }
+  return { header: header, recruits: recruits };
+}
+
+function writeFolderLinks(sheet, values, header, linked) {
+  if (!linked || !linked.length) return;
+  const idCol = columnIndex(header, 'id');
+  const fileCol = columnIndex(header, 'photoFileId');
+  const sourceCol = columnIndex(header, 'photoSource');
+  if (idCol < 0 || fileCol < 0 || sourceCol < 0) throw new Error('Recruits sheet is missing photo columns');
+  const rowById = {};
+  for (let i = 1; i < values.length; i++) rowById[String(values[i][idCol])] = i;
+  linked.forEach(item => {
+    const row = rowById[String(item.recruitId)];
+    if (row == null) return;
+    if (textField(values[row][fileCol]) || textField(values[row][sourceCol])) return;
+    sheet.getRange(row + 1, fileCol + 1).setValue(item.fileId);
+    sheet.getRange(row + 1, sourceCol + 1).setValue('folder');
+  });
+}
+
+function syncPhotoFolder(ss) {
+  return withLock(() => {
+    const folder = getPhotoFolder(ss);
+    const files = listImageFiles(folder);
+    const sheet = getSheet(ss, 'Recruits');
+    const values = sheet.getDataRange().getValues();
+    const parsed = recruitsFromValues(values);
+    const plan = planPhotoLinks(files, parsed.recruits);
+    writeFolderLinks(sheet, values, parsed.header, plan.linked);
+    return plan;
+  });
+}
+
+function linkPhoto(ss, body) {
+  return withLock(() => {
+    const fileId = textField(body && body.fileId);
+    const recruitId = textField(body && body.recruitId);
+    if (!fileId || !recruitId) return { error: 'Missing photo link' };
+    const folder = getPhotoFolder(ss);
+    const file = openDriveFile(fileId);
+    if (!fileInPhotoFolder(file, folder)) return { error: 'Photo is not in the Recruit Photos folder' };
+    const sheet = getSheet(ss, 'Recruits');
+    const values = sheet.getDataRange().getValues();
+    const located = recruitRow(values, headerOf(values), recruitId);
+    if (!located) return { error: 'Recruit not found' };
+    if (located.photoFileId || located.photoSource) return { error: 'Recruit already has a photo' };
+    sheet.getRange(located.row + 1, located.fileCol + 1).setValue(fileId);
+    sheet.getRange(located.row + 1, located.sourceCol + 1).setValue('folder');
+    return { ok: true, photoFileId: fileId, photoSource: 'folder' };
+  });
+}
+
+if (typeof module !== 'undefined') {
+  module.exports = {
+    doPost: doPost,
+    rowsToObjects: rowsToObjects,
+    castVote: castVote,
+    manageUser: manageUser,
+    bootstrap: bootstrap,
+    getMe: getMe,
+    saveNote: saveNote,
+    getAdminData: getAdminData,
+    getVoteData: getVoteData,
+    addRecruit: addRecruit,
+    ensureSheets: ensureSheets,
+    deleteRecruit: deleteRecruit,
+    uploadPhoto: uploadPhoto,
+    getPhotos: getPhotos,
+    syncPhotoFolder: syncPhotoFolder,
+    linkPhoto: linkPhoto,
+    normalizeName: normalizeName,
+    similarity: similarity,
+    planPhotoLinks: planPhotoLinks,
+  };
+}

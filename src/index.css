@@ -64,3 +64,19 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .badge-good { background: #e8f5e8; color: #2d7a2d; }
 .badge-bad { background: #fde8e8; color: #b83232; }
 .badge-gray { background: #f0efe8; color: #777; }
+
+.avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #efece4;
+  color: #5c584f;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  flex: none;
+  overflow: hidden;
+}
