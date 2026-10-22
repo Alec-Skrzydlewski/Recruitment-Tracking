@@ -246,18 +246,17 @@ test('apply does not mutate the original data object', () => {
   assert.deepEqual(original, snapshot);
 });
 
-test('recruit program fields survive optimistic add, id swap, and rollback', () => {
+test('recruit fields survive optimistic add, id swap, and rollback', () => {
   const item = {
     name: 'Ada',
     major: 'Finance (BSBA)',
     secondMajor: 'Economics (BA)',
-    minor: 'Accounting',
-    programLevel: 'Undergraduate',
-    gradTerm: 'Spring 2027',
-    photoUrl: 'https://example.com/a.jpg',
+    gradYear: '2027',
+    photoFileId: '',
+    photoSource: '',
   };
   const original = data({
-    recruits: [{ id: 'r1', name: 'Bea', major: 'Marketing (BSBA)', minor: 'Finance' }],
+    recruits: [{ id: 'r1', name: 'Bea', major: 'Marketing (BSBA)', gradYear: '2028' }],
   });
   const added = apply(original, {
     type: 'addTemp',
@@ -272,11 +271,10 @@ test('recruit program fields survive optimistic add, id swap, and rollback', () 
   assert.equal(swapped.recruits[1].name, 'Ada');
   assert.equal(swapped.recruits[1].major, 'Finance (BSBA)');
   assert.equal(swapped.recruits[1].secondMajor, 'Economics (BA)');
-  assert.equal(swapped.recruits[1].minor, 'Accounting');
-  assert.equal(swapped.recruits[1].programLevel, 'Undergraduate');
-  assert.equal(swapped.recruits[1].gradTerm, 'Spring 2027');
-  assert.equal(swapped.recruits[1].photoUrl, 'https://example.com/a.jpg');
-  assert.equal(swapped.recruits[0].minor, 'Finance');
+  assert.equal(swapped.recruits[1].gradYear, '2027');
+  assert.equal(swapped.recruits[1].photoFileId, '');
+  assert.equal(swapped.recruits[1].photoSource, '');
+  assert.equal(swapped.recruits[0].gradYear, '2028');
 
   const rolled = rollback(added.data, added.inverse);
   assert.deepEqual(rolled.recruits, original.recruits);

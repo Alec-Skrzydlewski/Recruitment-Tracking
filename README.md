@@ -11,13 +11,14 @@ Free, no-pause recruitment voting app for Delta Sigma Pi chapters. Uses a Google
 5. Click **Deploy → New deployment → Select type: Web app**.
    - Execute as: **Me**
    - Who has access: **Anyone**
-6. Authorize when prompted. Copy the **Web app URL**.
-7. In this repo, create a `.env` file (or set the Vercel env var):
+6. In the Apps Script project, open the manifest (`appsscript.json`) and include the Drive scope from this repo (`https://www.googleapis.com/auth/drive`) along with the Sheets and external-request scopes. Drive access is what lets the script read photos an officer drops into the folder.
+7. Authorize when prompted. Copy the **Web app URL**.
+8. In this repo, create a `.env` file (or set the Vercel env var):
    ```
    VITE_APPS_SCRIPT_URL=https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec
    VITE_GOOGLE_CLIENT_ID=your-google-oauth-client-id.apps.googleusercontent.com
    ```
-8. Deploy the frontend to Vercel (or any static host). The first person who signs in with Google becomes the admin.
+9. Deploy the frontend to Vercel (or any static host). The first person who signs in with Google becomes the admin.
 
 ### Google OAuth Client ID
 - Go to [Google Cloud Console](https://console.cloud.google.com/) → APIs & Services → Credentials.
@@ -29,11 +30,12 @@ Free, no-pause recruitment voting app for Delta Sigma Pi chapters. Uses a Google
 
 - **Brothers**: Open the app link, sign in with Google, select an event, rate each recruit 1–10.
 - **Admins**:
-  - Add/remove recruits and events.
+  - Add/remove recruits and events. A recruit has a major, an optional second major, and an optional graduation year.
+  - Add a photo from the recruit form, or drop image files into the **Recruit Photos** folder (created next to the spreadsheet) and use **Sync photo folder**. Clear name matches link themselves. Uncertain ones stay under **Unmatched photos** for a one-click link. Files stay private. Removing a recruit does not delete the Drive file.
   - Take attendance so only present recruits appear for voting.
   - Write notes.
   - Manage users (add by email, change role to admin/brother, remove).
-  - At the end of the cycle, click **Wipe Cycle** (clears recruits, events, votes, and notes; keeps the user list).
+  - At the end of the cycle, click **Wipe Cycle** (clears recruits, events, votes, and notes; keeps the user list and the Drive photos).
 
 ## Annual handoff
 
