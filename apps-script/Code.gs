@@ -1,7 +1,6 @@
 // Recruitment Tracker — Google Apps Script Backend
-// Deploy as Web App: Execute as Me, Who has access: Anyone
-
-const SHEET_ID = SpreadsheetApp.getActiveSpreadsheet().getId();
+// Deploy as Web App from the sheet (Extensions → Apps Script): Execute as Me, Who has access: Anyone
+// SHEET_ID is read inside doPost so this file can load in tests without SpreadsheetApp.
 
 function doPost(e) {
   try {
@@ -11,6 +10,7 @@ function doPost(e) {
     const user = verifyToken(token);
     if (!user) return json({ error: 'Invalid or expired login' });
 
+    const SHEET_ID = SpreadsheetApp.getActiveSpreadsheet().getId();
     const ss = SpreadsheetApp.openById(SHEET_ID);
     ensureSheets(ss);
 
@@ -27,7 +27,7 @@ function doPost(e) {
       case 'deleteEvent': result = requireAdmin(ss, user) && deleteEvent(ss, body); break;
       case 'toggleAttendance': result = requireAdmin(ss, user) && toggleAttendance(ss, body); break;
       case 'saveNote': result = requireAdmin(ss, user) && saveNote(ss, body); break;
-      case 'manageUser': result = requireAdmin(ss, user) && manageUser(ss, body); break;
+      case 'manageUser': result = requireAdmin(ss, user) && manageUser(ss, user, body); break;
       case 'wipeCycle': result = requireAdmin(ss, user) && wipeCycle(ss); break;
       default: result = { error: 'Unknown action' };
     }
@@ -43,7 +43,7 @@ function verifyToken(token) {
     const res = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(token));
     const data = JSON.parse(res.getContentText());
     if (data.email && data.email_verified === 'true') {
-      return { email: data.email.toLowerCase(), name: data.name || data.email };
+      return { email: String(data.email).toLowerCase(), name: data.name || data.email };
     }
   } catch (e) {}
   return null;
@@ -52,6 +52,16 @@ function verifyToken(token) {
 function json(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+function withLock(fn) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function ensureSheets(ss) {
@@ -76,33 +86,63 @@ function getSheet(ss, name) {
   return ss.getSheetByName(name);
 }
 
+function cellNonEmpty(value) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  return true;
+}
+
 function rowsToObjects(sheet) {
   const data = sheet.getDataRange().getValues();
   if (data.length < 2) return [];
   const headers = data[0];
   return data.slice(1).map(row => {
     const obj = {};
-    headers.forEach((h, i) => obj[h] = row[i]);
+    headers.forEach((h, i) => { obj[h] = row[i]; });
     return obj;
-  }).filter(o => o.email || o.id || o.eventId);
+  }).filter(row => Object.keys(row).some(key => cellNonEmpty(row[key])));
+}
+
+function emailsEqual(a, b) {
+  return String(a || '').toLowerCase() === String(b || '').toLowerCase();
+}
+
+function publicUser(row) {
+  return {
+    email: String(row.email).toLowerCase(),
+    name: row.name,
+    role: row.role
+  };
+}
+
+function findActiveUser(users, email) {
+  return users.find(u => emailsEqual(u.email, email) && String(u.active) === 'yes') || null;
 }
 
 function bootstrap(ss, user) {
   const usersSheet = getSheet(ss, 'Users');
   const existing = rowsToObjects(usersSheet);
   if (existing.length === 0) {
-    usersSheet.appendRow([user.email, user.name, 'admin', 'yes']);
-    return { role: 'admin', bootstrapped: true };
+    return withLock(() => {
+      const again = rowsToObjects(usersSheet);
+      if (again.length === 0) {
+        const email = String(user.email).toLowerCase();
+        usersSheet.appendRow([email, user.name, 'admin', 'yes']);
+        return { email: email, name: user.name, role: 'admin', bootstrapped: true };
+      }
+      const me = findActiveUser(again, user.email);
+      return me ? publicUser(me) : { error: 'Not authorized. Ask an admin to add you.' };
+    });
   }
-  const me = existing.find(u => u.email === user.email && u.active === 'yes');
-  return me ? { role: me.role } : { error: 'Not authorized. Ask an admin to add you.' };
+  const me = findActiveUser(existing, user.email);
+  return me ? publicUser(me) : { error: 'Not authorized. Ask an admin to add you.' };
 }
 
 function getMe(ss, user) {
   const users = rowsToObjects(getSheet(ss, 'Users'));
-  const me = users.find(u => u.email === user.email && u.active === 'yes');
+  const me = findActiveUser(users, user.email);
   if (!me) return { error: 'Not authorized' };
-  return { email: me.email, name: me.name, role: me.role };
+  return publicUser(me);
 }
 
 function requireAdmin(ss, user) {
@@ -117,28 +157,45 @@ function getVoteData(ss, user) {
   const recruits = rowsToObjects(getSheet(ss, 'Recruits'));
   const events = rowsToObjects(getSheet(ss, 'Events'));
   const attendance = rowsToObjects(getSheet(ss, 'EventRecruits'));
-  const votes = rowsToObjects(getSheet(ss, 'Votes')).filter(v => v.userEmail === user.email);
+  const votes = rowsToObjects(getSheet(ss, 'Votes')).filter(v => emailsEqual(v.userEmail, user.email));
   return { me, recruits, events, attendance, myVotes: votes };
 }
 
+function scoreValue(score) {
+  if (typeof score === 'boolean' || score === null || score === undefined || score === '') return null;
+  const n = Number(score);
+  if (!Number.isInteger(n) || n < 1 || n > 10) return null;
+  return n;
+}
+
 function castVote(ss, user, body) {
-  const { eventId, recruitId, score } = body;
-  if (!eventId || !recruitId || score < 1 || score > 10) return { error: 'Invalid vote' };
-  const sheet = getSheet(ss, 'Votes');
-  const data = sheet.getDataRange().getValues();
-  let found = false;
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][0] === eventId && data[i][1] === recruitId && data[i][2] === user.email) {
-      sheet.getRange(i + 1, 4).setValue(score);
-      sheet.getRange(i + 1, 5).setValue(new Date().toISOString());
-      found = true;
-      break;
+  const eventId = body.eventId;
+  const recruitId = body.recruitId;
+  const score = scoreValue(body.score);
+  if (!eventId || !recruitId || score === null) return { error: 'Invalid vote' };
+  return withLock(() => {
+    const email = String(user.email || '').toLowerCase();
+    const sheet = getSheet(ss, 'Votes');
+    const data = sheet.getDataRange().getValues();
+    const matches = [];
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][0]) === String(eventId) && String(data[i][1]) === String(recruitId) && emailsEqual(data[i][2], email)) {
+        matches.push(i);
+      }
     }
-  }
-  if (!found) {
-    sheet.appendRow([eventId, recruitId, user.email, score, new Date().toISOString()]);
-  }
-  return { ok: true };
+    if (matches.length === 0) {
+      sheet.appendRow([eventId, recruitId, email, score, new Date().toISOString()]);
+    } else {
+      const keep = matches[0];
+      sheet.getRange(keep + 1, 3).setValue(email);
+      sheet.getRange(keep + 1, 4).setValue(score);
+      sheet.getRange(keep + 1, 5).setValue(new Date().toISOString());
+      for (let m = matches.length - 1; m >= 1; m--) {
+        sheet.deleteRow(matches[m] + 1);
+      }
+    }
+    return { ok: true };
+  });
 }
 
 function getAdminData(ss) {
@@ -153,89 +210,137 @@ function getAdminData(ss) {
 }
 
 function addRecruit(ss, body) {
-  const id = Utilities.getUuid();
-  getSheet(ss, 'Recruits').appendRow([id, body.name || '', body.major || '', body.photoUrl || '']);
-  return { id };
+  return withLock(() => {
+    const id = Utilities.getUuid();
+    getSheet(ss, 'Recruits').appendRow([id, body.name || '', body.major || '', body.photoUrl || '']);
+    return { id };
+  });
 }
 
 function deleteRecruit(ss, body) {
-  // Simple: clear by filtering (for production you'd delete the row)
-  const sheet = getSheet(ss, 'Recruits');
-  const data = sheet.getDataRange().getValues();
-  for (let i = data.length - 1; i >= 1; i--) {
-    if (data[i][0] === body.id) sheet.deleteRow(i + 1);
-  }
-  return { ok: true };
+  return withLock(() => {
+    const sheet = getSheet(ss, 'Recruits');
+    const data = sheet.getDataRange().getValues();
+    for (let i = data.length - 1; i >= 1; i--) {
+      if (data[i][0] === body.id) sheet.deleteRow(i + 1);
+    }
+    return { ok: true };
+  });
 }
 
 function addEvent(ss, body) {
-  const id = Utilities.getUuid();
-  getSheet(ss, 'Events').appendRow([id, body.name || '']);
-  return { id };
+  return withLock(() => {
+    const id = Utilities.getUuid();
+    getSheet(ss, 'Events').appendRow([id, body.name || '']);
+    return { id };
+  });
 }
 
 function deleteEvent(ss, body) {
-  const sheet = getSheet(ss, 'Events');
-  const data = sheet.getDataRange().getValues();
-  for (let i = data.length - 1; i >= 1; i--) {
-    if (data[i][0] === body.id) sheet.deleteRow(i + 1);
-  }
-  return { ok: true };
+  return withLock(() => {
+    const sheet = getSheet(ss, 'Events');
+    const data = sheet.getDataRange().getValues();
+    for (let i = data.length - 1; i >= 1; i--) {
+      if (data[i][0] === body.id) sheet.deleteRow(i + 1);
+    }
+    return { ok: true };
+  });
 }
 
 function toggleAttendance(ss, body) {
-  const sheet = getSheet(ss, 'EventRecruits');
-  const data = sheet.getDataRange().getValues();
-  let exists = false;
-  for (let i = data.length - 1; i >= 1; i--) {
-    if (data[i][0] === body.eventId && data[i][1] === body.recruitId) {
-      sheet.deleteRow(i + 1);
-      exists = true;
+  return withLock(() => {
+    const sheet = getSheet(ss, 'EventRecruits');
+    const data = sheet.getDataRange().getValues();
+    let exists = false;
+    for (let i = data.length - 1; i >= 1; i--) {
+      if (data[i][0] === body.eventId && data[i][1] === body.recruitId) {
+        sheet.deleteRow(i + 1);
+        exists = true;
+      }
     }
-  }
-  if (!exists) sheet.appendRow([body.eventId, body.recruitId]);
-  return { ok: true };
+    if (!exists) sheet.appendRow([body.eventId, body.recruitId]);
+    return { ok: true };
+  });
 }
 
 function saveNote(ss, body) {
-  const sheet = getSheet(ss, 'Notes');
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][0] === body.recruitId) {
-      sheet.getRange(i + 1, 2).setValue(body.content);
-      sheet.getRange(i + 1, 3).setValue(new Date().toISOString());
-      return { ok: true };
-    }
-  }
-  sheet.appendRow([body.recruitId, body.content, new Date().toISOString()]);
-  return { ok: true };
-}
-
-function manageUser(ss, body) {
-  const sheet = getSheet(ss, 'Users');
-  const data = sheet.getDataRange().getValues();
-  if (body.op === 'add') {
-    sheet.appendRow([body.email.toLowerCase(), body.name || body.email, body.role || 'brother', 'yes']);
-  } else if (body.op === 'remove') {
-    for (let i = data.length - 1; i >= 1; i--) {
-      if (data[i][0] === body.email.toLowerCase()) sheet.deleteRow(i + 1);
-    }
-  } else if (body.op === 'setRole') {
+  return withLock(() => {
+    const sheet = getSheet(ss, 'Notes');
+    const data = sheet.getDataRange().getValues();
     for (let i = 1; i < data.length; i++) {
-      if (data[i][0] === body.email.toLowerCase()) {
-        sheet.getRange(i + 1, 3).setValue(body.role);
+      if (data[i][0] === body.recruitId) {
+        sheet.getRange(i + 1, 2).setValue(body.content);
+        sheet.getRange(i + 1, 3).setValue(new Date().toISOString());
+        return { ok: true };
       }
     }
+    sheet.appendRow([body.recruitId, body.content, new Date().toISOString()]);
+    return { ok: true };
+  });
+}
+
+function isLastActiveAdmin(data, email) {
+  const admins = [];
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][2]) === 'admin' && String(data[i][3]) === 'yes') {
+      admins.push(String(data[i][0] || '').toLowerCase());
+    }
   }
-  return { ok: true };
+  return admins.length === 1 && admins[0] === String(email || '').toLowerCase();
+}
+
+function manageUser(ss, user, body) {
+  return withLock(() => {
+    const sheet = getSheet(ss, 'Users');
+    const email = String(body.email || '').toLowerCase();
+    const actor = String((user && user.email) || '').toLowerCase();
+    const data = sheet.getDataRange().getValues();
+
+    if (body.op === 'add') {
+      for (let i = 1; i < data.length; i++) {
+        if (String(data[i][0] || '').toLowerCase() === email) {
+          return { error: 'User already exists' };
+        }
+      }
+      sheet.appendRow([email, body.name || body.email || email, body.role || 'brother', 'yes']);
+      return { ok: true };
+    }
+
+    if (body.op === 'remove') {
+      if (email && email === actor) return { error: 'You cannot remove yourself' };
+      if (isLastActiveAdmin(data, email)) return { error: 'Cannot remove the last admin' };
+      for (let i = data.length - 1; i >= 1; i--) {
+        if (String(data[i][0] || '').toLowerCase() === email) sheet.deleteRow(i + 1);
+      }
+      return { ok: true };
+    }
+
+    if (body.op === 'setRole') {
+      if (body.role !== 'admin' && isLastActiveAdmin(data, email)) {
+        return { error: 'Cannot demote the last admin' };
+      }
+      for (let i = 1; i < data.length; i++) {
+        if (String(data[i][0] || '').toLowerCase() === email) {
+          sheet.getRange(i + 1, 3).setValue(body.role);
+        }
+      }
+      return { ok: true };
+    }
+
+    return { error: 'Unknown user operation' };
+  });
 }
 
 function wipeCycle(ss) {
-  ['Recruits', 'Events', 'EventRecruits', 'Votes', 'Notes'].forEach(name => {
-    const sheet = getSheet(ss, name);
-    if (sheet && sheet.getLastRow() > 1) {
-      sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
-    }
+  return withLock(() => {
+    ['Recruits', 'Events', 'EventRecruits', 'Votes', 'Notes'].forEach(name => {
+      const sheet = getSheet(ss, name);
+      if (sheet && sheet.getLastRow() > 1) {
+        sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
+      }
+    });
+    return { ok: true, message: 'Cycle wiped. Users preserved.' };
   });
-  return { ok: true, message: 'Cycle wiped. Users preserved.' };
 }
+
+if (typeof module !== 'undefined') { module.exports = { doPost, rowsToObjects, castVote, manageUser, bootstrap, getMe, saveNote, getAdminData }; }

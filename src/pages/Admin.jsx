@@ -178,7 +178,7 @@ export default function Admin({ token, me }) {
                 {u.role !== 'admin' && (
                   <button onClick={async () => { await callApi('manageUser', token, { op: 'setRole', email: u.email, role: 'admin' }); load() }} style={{ fontSize: 12, marginRight: 8 }}>Make admin</button>
                 )}
-                {u.email !== me.email && (
+                {String(u.email || '').toLowerCase() !== String(me.email || '').toLowerCase() && (
                   <button onClick={async () => { if (confirm('Remove ' + u.email + '?')) { await callApi('manageUser', token, { op: 'remove', email: u.email }); load() } }} style={{ fontSize: 12, color: '#b83232' }}>Remove</button>
                 )}
               </div>

@@ -43,6 +43,12 @@ Free, no-pause recruitment voting app for Delta Sigma Pi chapters. Uses a Google
 
 No one ever needs to open Apps Script, Supabase, or any dashboard after the initial setup.
 
+## Go live
+
+The Apps Script project must be **bound to the Google Sheet** (open it from the sheet with **Extensions → Apps Script**, then deploy that project). A standalone script cannot see the spreadsheet with `getActiveSpreadsheet()`.
+
+Deploy as a web app: Execute as **Me**, Who has access: **Anyone**. The frontend POSTs a JSON body with `Content-Type: text/plain;charset=utf-8`. Apps Script web apps do not answer a CORS preflight, and `text/plain` lets the browser send the request without one. Set `VITE_APPS_SCRIPT_URL` to the web app URL.
+
 ## Local development
 
 ```bash
