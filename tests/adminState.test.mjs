@@ -246,6 +246,43 @@ test('apply does not mutate the original data object', () => {
   assert.deepEqual(original, snapshot);
 });
 
+test('recruit program fields survive optimistic add, id swap, and rollback', () => {
+  const item = {
+    name: 'Ada',
+    major: 'Finance (BSBA)',
+    secondMajor: 'Economics (BA)',
+    minor: 'Accounting',
+    programLevel: 'Undergraduate',
+    gradTerm: 'Spring 2027',
+    photoUrl: 'https://example.com/a.jpg',
+  };
+  const original = data({
+    recruits: [{ id: 'r1', name: 'Bea', major: 'Marketing (BSBA)', minor: 'Finance' }],
+  });
+  const added = apply(original, {
+    type: 'addTemp',
+    collection: 'recruits',
+    tempId: 'tmp-ada',
+    item,
+  });
+  assert.deepEqual(added.data.recruits[1], { id: 'tmp-ada', ...item });
+
+  const swapped = replaceId(added.data, 'tmp-ada', 'real-ada');
+  assert.equal(swapped.recruits[1].id, 'real-ada');
+  assert.equal(swapped.recruits[1].name, 'Ada');
+  assert.equal(swapped.recruits[1].major, 'Finance (BSBA)');
+  assert.equal(swapped.recruits[1].secondMajor, 'Economics (BA)');
+  assert.equal(swapped.recruits[1].minor, 'Accounting');
+  assert.equal(swapped.recruits[1].programLevel, 'Undergraduate');
+  assert.equal(swapped.recruits[1].gradTerm, 'Spring 2027');
+  assert.equal(swapped.recruits[1].photoUrl, 'https://example.com/a.jpg');
+  assert.equal(swapped.recruits[0].minor, 'Finance');
+
+  const rolled = rollback(added.data, added.inverse);
+  assert.deepEqual(rolled.recruits, original.recruits);
+  assert.equal(rolled.recruits.some(recruit => recruit.id === 'tmp-ada'), false);
+});
+
 test('double-submit guard helper rejects a second begin before end', () => {
   const guard = createInflightGuard();
   assert.equal(guard.begin('add-recruit'), true);

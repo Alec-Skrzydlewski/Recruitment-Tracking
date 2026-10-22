@@ -67,7 +67,7 @@ function withLock(fn) {
 function ensureSheets(ss) {
   const needed = {
     Users: ['email', 'name', 'role', 'active'],
-    Recruits: ['id', 'name', 'major', 'photoUrl'],
+    Recruits: ['id', 'name', 'major', 'photoUrl', 'secondMajor', 'minor', 'programLevel', 'gradTerm'],
     Events: ['id', 'name'],
     EventRecruits: ['eventId', 'recruitId'],
     Votes: ['eventId', 'recruitId', 'userEmail', 'score', 'timestamp'],
@@ -78,7 +78,29 @@ function ensureSheets(ss) {
     if (!sheet) {
       sheet = ss.insertSheet(name);
       sheet.appendRow(needed[name]);
+      return;
     }
+    // Append missing header cells. Never reorder or delete existing columns.
+    appendMissingHeaders(sheet, needed[name]);
+  });
+}
+
+function appendMissingHeaders(sheet, columns) {
+  if (sheet.getLastRow() < 1) {
+    sheet.appendRow(columns);
+    return;
+  }
+  const header = sheet.getDataRange().getValues()[0].map(cell => String(cell == null ? '' : cell).trim());
+  const present = {};
+  header.forEach(name => {
+    if (name) present[name] = true;
+  });
+  const missing = columns.filter(name => !present[name]);
+  if (!missing.length) return;
+  let col = header.length;
+  missing.forEach(name => {
+    col += 1;
+    sheet.getRange(1, col).setValue(name);
   });
 }
 
@@ -209,11 +231,30 @@ function getAdminData(ss) {
   };
 }
 
+function textField(value) {
+  if (value === null || value === undefined) return '';
+  return String(value).trim();
+}
+
 function addRecruit(ss, body) {
   return withLock(() => {
+    const sheet = getSheet(ss, 'Recruits');
+    const header = sheet.getDataRange().getValues()[0].map(cell => String(cell == null ? '' : cell).trim());
     const id = Utilities.getUuid();
-    getSheet(ss, 'Recruits').appendRow([id, body.name || '', body.major || '', body.photoUrl || '']);
-    return { id };
+    const source = body || {};
+    const values = {
+      id: id,
+      name: textField(source.name),
+      major: textField(source.major),
+      photoUrl: textField(source.photoUrl),
+      secondMajor: textField(source.secondMajor),
+      minor: textField(source.minor),
+      programLevel: textField(source.programLevel),
+      gradTerm: textField(source.gradTerm)
+    };
+    const row = header.map(key => Object.prototype.hasOwnProperty.call(values, key) ? values[key] : '');
+    sheet.appendRow(row);
+    return { id: id };
   });
 }
 
@@ -343,4 +384,4 @@ function wipeCycle(ss) {
   });
 }
 
-if (typeof module !== 'undefined') { module.exports = { doPost, rowsToObjects, castVote, manageUser, bootstrap, getMe, saveNote, getAdminData }; }
+if (typeof module !== 'undefined') { module.exports = { doPost, rowsToObjects, castVote, manageUser, bootstrap, getMe, saveNote, getAdminData, getVoteData, addRecruit, ensureSheets }; }

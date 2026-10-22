@@ -52,25 +52,32 @@ export default function Vote({ token, me }) {
 
           {recruits.length === 0 ? (
             <div className="card"><p style={{ color: '#888' }}>No recruits checked in for this event.</p></div>
-          ) : recruits.map(r => (
-            <div key={r.id} className="card" style={{ marginBottom: 12 }}>
-              <div style={{ fontWeight: 500, marginBottom: 8 }}>{r.name} {r.major && <span style={{ color: '#999', fontWeight: 400 }}>· {r.major}</span>}</div>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {[1,2,3,4,5,6,7,8,9,10].map(n => (
-                  <button
-                    key={n}
-                    onClick={() => vote(r.id, n)}
-                    style={{
-                      width: 36, height: 36, borderRadius: 8,
-                      background: myVoteMap[r.id] === n ? '#1a1a1a' : '#fff',
-                      color: myVoteMap[r.id] === n ? '#fff' : '#1a1a1a',
-                      border: '1px solid #ddd', fontWeight: 500,
-                    }}
-                  >{n}</button>
-                ))}
+          ) : recruits.map(r => {
+            const majorLine = [r.major, r.secondMajor].filter(Boolean).join(' / ')
+            const detail = [majorLine, r.gradTerm].filter(Boolean).join(' · ')
+            return (
+              <div key={r.id} className="card" style={{ marginBottom: 12 }}>
+                <div style={{ fontWeight: 500, marginBottom: 8 }}>
+                  {r.name}
+                  {detail && <span style={{ color: '#999', fontWeight: 400 }}> · {detail}</span>}
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {[1,2,3,4,5,6,7,8,9,10].map(n => (
+                    <button
+                      key={n}
+                      onClick={() => vote(r.id, n)}
+                      style={{
+                        width: 36, height: 36, borderRadius: 8,
+                        background: myVoteMap[r.id] === n ? '#1a1a1a' : '#fff',
+                        color: myVoteMap[r.id] === n ? '#fff' : '#1a1a1a',
+                        border: '1px solid #ddd', fontWeight: 500,
+                      }}
+                    >{n}</button>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </>
       )}
     </div>
