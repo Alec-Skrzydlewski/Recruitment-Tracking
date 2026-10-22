@@ -9,9 +9,40 @@ import {
   isTempId,
   createInflightGuard,
 } from '../lib/adminState'
+import {
+  MAJORS,
+  MINORS,
+  PROGRAM_LEVELS,
+  OTHER,
+  graduationTerms,
+  optionValue,
+} from '../lib/recruitOptions'
 
 function SavingPill() {
   return <span className="badge badge-gray" style={{ marginLeft: 8 }}>Saving…</span>
+}
+
+function recruitSummary(recruit) {
+  const majors = [recruit.major, recruit.secondMajor].filter(Boolean).join(' / ')
+  return [majors, recruit.minor, recruit.programLevel, recruit.gradTerm].filter(Boolean).join(' · ')
+}
+
+function MajorOptions() {
+  return (
+    <>
+      <optgroup label="Undergraduate">
+        {MAJORS.undergraduate.map(major => <option key={major} value={major}>{major}</option>)}
+      </optgroup>
+      <optgroup label="Graduate">
+        {MAJORS.graduate.map(major => <option key={major} value={major}>{major}</option>)}
+      </optgroup>
+      <option value={OTHER}>Other</option>
+    </>
+  )
+}
+
+function fieldLabelStyle() {
+  return { display: 'block', fontSize: 13, color: '#777', marginBottom: 4 }
 }
 
 export default function Admin({ token, me }) {
@@ -20,7 +51,16 @@ export default function Admin({ token, me }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [newName, setNewName] = useState('')
-  const [newMajor, setNewMajor] = useState('')
+  const [programLevel, setProgramLevel] = useState('')
+  const [majorChoice, setMajorChoice] = useState('')
+  const [majorCustom, setMajorCustom] = useState('')
+  const [secondChoice, setSecondChoice] = useState('')
+  const [secondCustom, setSecondCustom] = useState('')
+  const [minorChoice, setMinorChoice] = useState('')
+  const [minorCustom, setMinorCustom] = useState('')
+  const [gradTerm, setGradTerm] = useState('')
+  const [photoUrl, setPhotoUrl] = useState('')
+  const [recruitError, setRecruitError] = useState('')
   const [newEvent, setNewEvent] = useState('')
   const [newEmail, setNewEmail] = useState('')
   const [noteDrafts, setNoteDrafts] = useState({})
@@ -88,20 +128,47 @@ export default function Admin({ token, me }) {
   async function addRecruit(e) {
     e.preventDefault()
     const name = newName.trim()
-    const major = newMajor.trim()
+    const level = programLevel.trim()
+    const major = optionValue(majorChoice, majorCustom)
+    const secondMajor = optionValue(secondChoice, secondCustom)
+    const minor = optionValue(minorChoice, minorCustom)
+    const grad = gradTerm.trim()
+    const photo = photoUrl.trim()
     if (!name) return
+    if (!level) {
+      setRecruitError('Program level is required.')
+      return
+    }
+    if (!major) {
+      setRecruitError('Major is required.')
+      return
+    }
+    if (secondMajor && secondMajor.toLowerCase() === major.toLowerCase()) {
+      setRecruitError('Second major must be different from the major.')
+      return
+    }
+    setRecruitError('')
     if (!begin('add-recruit')) return
     setNewName('')
-    setNewMajor('')
+    setProgramLevel('')
+    setMajorChoice('')
+    setMajorCustom('')
+    setSecondChoice('')
+    setSecondCustom('')
+    setMinorChoice('')
+    setMinorCustom('')
+    setGradTerm('')
+    setPhotoUrl('')
     const tempId = nextTempId()
+    const item = { name, major, secondMajor, minor, programLevel: level, gradTerm: grad, photoUrl: photo }
     const inverse = applyAction({
       type: 'addTemp',
       collection: 'recruits',
       tempId,
-      item: { name, major },
+      item,
     })
     try {
-      const res = await callApi('addRecruit', token, { name, major })
+      const res = await callApi('addRecruit', token, item)
       const realId = res && res.id
       if (realId && dataRef.current) {
         commit(replaceId(dataRef.current, tempId, realId))
@@ -330,10 +397,12 @@ export default function Admin({ token, me }) {
             data.recruits.map(r => (
               <div key={r.id} className="card" style={{ marginBottom: 12 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <div>
+                  <div style={{ minWidth: 0 }}>
                     <strong>{r.name}</strong>
-                    {r.major && <span style={{ color: '#999' }}> · {r.major}</span>}
                     {isTempId(r.id) && <SavingPill />}
+                    {recruitSummary(r) && (
+                      <div style={{ color: '#999', fontSize: 13, fontWeight: 400 }}>{recruitSummary(r)}</div>
+                    )}
                   </div>
                   <div style={{ fontSize: 18, fontWeight: 500 }}>{scoreFor(r.id) ?? '—'}</div>
                 </div>
@@ -355,18 +424,103 @@ export default function Admin({ token, me }) {
 
       {tab === 'recruits' && (
         <div>
-          <form onSubmit={addRecruit} style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-            <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Name" required style={{ flex: 1 }} />
-            <input value={newMajor} onChange={e => setNewMajor(e.target.value)} placeholder="Major (optional)" style={{ flex: 1 }} />
-            <button type="submit" className="btn-primary" disabled={!!saving['add-recruit']}>Add</button>
-            {saving['add-recruit'] && <SavingPill />}
+          <form onSubmit={addRecruit} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+            <label>
+              <span style={fieldLabelStyle()}>Name</span>
+              <input value={newName} onChange={e => { setRecruitError(''); setNewName(e.target.value) }} placeholder="Name" required autoComplete="name" />
+            </label>
+            <label>
+              <span style={fieldLabelStyle()}>Program level</span>
+              <select value={programLevel} onChange={e => { setRecruitError(''); setProgramLevel(e.target.value) }} required>
+                <option value="">Select program level</option>
+                {PROGRAM_LEVELS.map(level => <option key={level} value={level}>{level}</option>)}
+              </select>
+            </label>
+            <label>
+              <span style={fieldLabelStyle()}>Major</span>
+              <select value={majorChoice} onChange={e => { setRecruitError(''); setMajorChoice(e.target.value) }} required>
+                <option value="">Select major</option>
+                <MajorOptions />
+              </select>
+            </label>
+            {majorChoice === OTHER && (
+              <input
+                value={majorCustom}
+                onChange={e => { setRecruitError(''); setMajorCustom(e.target.value) }}
+                placeholder="Type major"
+                aria-label="Other major"
+                required
+                autoComplete="off"
+              />
+            )}
+            <label>
+              <span style={fieldLabelStyle()}>Second major</span>
+              <select value={secondChoice} onChange={e => { setRecruitError(''); setSecondChoice(e.target.value) }}>
+                <option value="">None</option>
+                <MajorOptions />
+              </select>
+            </label>
+            {secondChoice === OTHER && (
+              <input
+                value={secondCustom}
+                onChange={e => { setRecruitError(''); setSecondCustom(e.target.value) }}
+                placeholder="Type second major"
+                aria-label="Other second major"
+                autoComplete="off"
+              />
+            )}
+            <label>
+              <span style={fieldLabelStyle()}>Minor</span>
+              <select value={minorChoice} onChange={e => { setRecruitError(''); setMinorChoice(e.target.value) }}>
+                <option value="">None</option>
+                {MINORS.map(minor => <option key={minor} value={minor}>{minor}</option>)}
+                <option value={OTHER}>Other</option>
+              </select>
+            </label>
+            {minorChoice === OTHER && (
+              <input
+                value={minorCustom}
+                onChange={e => { setRecruitError(''); setMinorCustom(e.target.value) }}
+                placeholder="Type minor"
+                aria-label="Other minor"
+                autoComplete="off"
+              />
+            )}
+            <label>
+              <span style={fieldLabelStyle()}>Graduation</span>
+              <select value={gradTerm} onChange={e => { setRecruitError(''); setGradTerm(e.target.value) }}>
+                <option value="">Graduation (optional)</option>
+                {graduationTerms().map(term => <option key={term} value={term}>{term}</option>)}
+              </select>
+            </label>
+            <label>
+              <span style={fieldLabelStyle()}>Photo URL</span>
+              <input
+                value={photoUrl}
+                onChange={e => { setRecruitError(''); setPhotoUrl(e.target.value) }}
+                placeholder="Photo URL (optional)"
+                autoComplete="off"
+              />
+            </label>
+            {recruitError && (
+              <div role="alert" style={{ color: '#b83232', fontSize: 13 }}>{recruitError}</div>
+            )}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button type="submit" className="btn-primary" disabled={!!saving['add-recruit']}>Add</button>
+              {saving['add-recruit'] && <SavingPill />}
+            </div>
           </form>
           {deletingRecruits && <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>Saving…</div>}
           {data.recruits.map(r => (
-            <div key={r.id} className="card" style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>
-                {r.name} {r.major && <span style={{ color: '#999' }}>· {r.major}</span>}
-                {isTempId(r.id) && <SavingPill />}
+            <div key={r.id} className="card" style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <div>
+                  {r.name}
+                  {isTempId(r.id) && <SavingPill />}
+                </div>
+                {recruitSummary(r) && (
+                  <div style={{ color: '#999', fontSize: 13 }}>{recruitSummary(r)}</div>
+                )}
               </span>
               <button
                 onClick={() => onDeleteRecruit(r.id)}

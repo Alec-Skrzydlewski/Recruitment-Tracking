@@ -52,18 +52,19 @@ function makeSheet(rows) {
   };
 }
 
-function makeSs(seed = {}) {
+function makeSs(seed = {}, headerOverrides = {}) {
   const sheets = {};
   const spec = {
     Users: ['email', 'name', 'role', 'active'],
-    Recruits: ['id', 'name', 'major', 'photoUrl'],
+    Recruits: ['id', 'name', 'major', 'photoUrl', 'secondMajor', 'minor', 'programLevel', 'gradTerm'],
     Events: ['id', 'name'],
     EventRecruits: ['eventId', 'recruitId'],
     Votes: ['eventId', 'recruitId', 'userEmail', 'score', 'timestamp'],
     Notes: ['recruitId', 'content', 'updatedAt'],
   };
   Object.keys(spec).forEach(name => {
-    sheets[name] = makeSheet([spec[name], ...(seed[name] || []).map(row => row.slice())]);
+    const header = headerOverrides[name] || spec[name];
+    sheets[name] = makeSheet([header.slice(), ...(seed[name] || []).map(row => row.slice())]);
   });
   return {
     getId() { return 'test-sheet'; },
@@ -250,6 +251,123 @@ test('first sign-in becomes admin and returns email', () => {
 
   const me = api.getMe(currentSs, { email: 'first@chapter.org' });
   assert.deepEqual(plain(me), { email: 'first@chapter.org', name: 'First Person', role: 'admin' });
+});
+
+const RECRUIT_HEADER = ['id', 'name', 'major', 'photoUrl', 'secondMajor', 'minor', 'programLevel', 'gradTerm'];
+
+test('ensureSheets appends missing Recruits headers without reordering or deleting', () => {
+  const ss = makeSs(
+    { Recruits: [['Ada', 'r1', 'Finance (BSBA)', 'http://photo']] },
+    { Recruits: ['name', 'id', 'major', 'photoUrl'] },
+  );
+  api.ensureSheets(ss);
+  const sheet = ss.getSheetByName('Recruits');
+  let values = sheet.getDataRange().getValues();
+  assert.deepEqual(values[0], ['name', 'id', 'major', 'photoUrl', 'secondMajor', 'minor', 'programLevel', 'gradTerm']);
+  assert.deepEqual(values[1], ['Ada', 'r1', 'Finance (BSBA)', 'http://photo']);
+
+  api.ensureSheets(ss);
+  values = sheet.getDataRange().getValues();
+  assert.deepEqual(values[0], ['name', 'id', 'major', 'photoUrl', 'secondMajor', 'minor', 'programLevel', 'gradTerm']);
+  assert.equal(values.length, 2);
+  assert.deepEqual(values[1], ['Ada', 'r1', 'Finance (BSBA)', 'http://photo']);
+
+  const partial = makeSs(
+    { Recruits: [['r1', 'Ada', 'Marketing (BSBA)', '', 'Economics (BA)', 'keep']] },
+    { Recruits: ['id', 'name', 'major', 'photoUrl', 'secondMajor', 'legacy'] },
+  );
+  api.ensureSheets(partial);
+  const migrated = partial.getSheetByName('Recruits').getDataRange().getValues();
+  assert.deepEqual(migrated[0], ['id', 'name', 'major', 'photoUrl', 'secondMajor', 'legacy', 'minor', 'programLevel', 'gradTerm']);
+  assert.deepEqual(migrated[1], ['r1', 'Ada', 'Marketing (BSBA)', '', 'Economics (BA)', 'keep']);
+});
+
+test('ensureSheets creates a Recruits sheet with the extended header', () => {
+  const sheets = {};
+  const ss = {
+    getSheetByName(name) { return sheets[name] || null; },
+    insertSheet(name) {
+      sheets[name] = makeSheet([]);
+      return sheets[name];
+    },
+  };
+  api.ensureSheets(ss);
+  assert.deepEqual(ss.getSheetByName('Recruits').getDataRange().getValues()[0], RECRUIT_HEADER);
+  assert.deepEqual(ss.getSheetByName('Users').getDataRange().getValues()[0], ['email', 'name', 'role', 'active']);
+});
+
+test('addRecruit writes trimmed fields in header order and reads back', () => {
+  const ss = makeSs({
+    Users: [['ada@chapter.org', 'Ada', 'brother', 'yes']],
+  });
+  api.ensureSheets(ss);
+  const created = api.addRecruit(ss, {
+    name: '  Ada Lovelace ',
+    major: ' Finance (BSBA) ',
+    photoUrl: ' https://example.com/a.jpg ',
+    secondMajor: ' Economics (BA) ',
+    minor: ' Accounting ',
+    programLevel: ' Undergraduate ',
+    gradTerm: ' Spring 2027 ',
+  });
+  let values = ss.getSheetByName('Recruits').getDataRange().getValues();
+  assert.deepEqual(values[0], RECRUIT_HEADER);
+  assert.deepEqual(values[1], [
+    created.id,
+    'Ada Lovelace',
+    'Finance (BSBA)',
+    'https://example.com/a.jpg',
+    'Economics (BA)',
+    'Accounting',
+    'Undergraduate',
+    'Spring 2027',
+  ]);
+
+  const blank = api.addRecruit(ss, { name: '  Bea  ', photoUrl: '   ', secondMajor: '  ' });
+  values = ss.getSheetByName('Recruits').getDataRange().getValues();
+  assert.deepEqual(values[2], [blank.id, 'Bea', '', '', '', '', '', '']);
+
+  const shifted = makeSs(
+    { Recruits: [['Ada', 'r1', 'Finance (BSBA)', 'http://photo']] },
+    { Recruits: ['name', 'id', 'major', 'photoUrl'] },
+  );
+  api.ensureSheets(shifted);
+  const extra = api.addRecruit(shifted, {
+    name: 'Cyd',
+    major: 'Marketing (BSBA)',
+    minor: 'Statistics',
+    programLevel: 'MBA',
+    gradTerm: 'Fall 2030',
+  });
+  const shiftedRows = shifted.getSheetByName('Recruits').getDataRange().getValues();
+  assert.deepEqual(shiftedRows[2], [
+    'Cyd',
+    extra.id,
+    'Marketing (BSBA)',
+    '',
+    '',
+    'Statistics',
+    'MBA',
+    'Fall 2030',
+  ]);
+
+  const admin = plain(api.getAdminData(ss));
+  const ada = admin.recruits.find(recruit => recruit.id === created.id);
+  assert.equal(ada.major, 'Finance (BSBA)');
+  assert.equal(ada.photoUrl, 'https://example.com/a.jpg');
+  assert.equal(ada.secondMajor, 'Economics (BA)');
+  assert.equal(ada.minor, 'Accounting');
+  assert.equal(ada.programLevel, 'Undergraduate');
+  assert.equal(ada.gradTerm, 'Spring 2027');
+  assert.equal(admin.recruits.find(recruit => recruit.id === blank.id).secondMajor, '');
+
+  const vote = plain(api.getVoteData(ss, { email: 'Ada@chapter.org' }));
+  const voted = vote.recruits.find(recruit => recruit.id === created.id);
+  assert.equal(voted.major, 'Finance (BSBA)');
+  assert.equal(voted.secondMajor, 'Economics (BA)');
+  assert.equal(voted.minor, 'Accounting');
+  assert.equal(voted.programLevel, 'Undergraduate');
+  assert.equal(voted.gradTerm, 'Spring 2027');
 });
 
 test('unknown user gets the unauthorized message', () => {
