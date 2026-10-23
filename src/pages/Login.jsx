@@ -11,7 +11,6 @@ export default function Login({ onToken, message }) {
           <GoogleLogin
             onSuccess={cred => onToken(cred.credential)}
             onError={() => alert('Login failed')}
-            useOneTap
           />
         </div>
         <p style={{ fontSize: 12, color: '#aaa', marginTop: 16 }}>
