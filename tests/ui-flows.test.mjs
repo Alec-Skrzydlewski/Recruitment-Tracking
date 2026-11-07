@@ -366,3 +366,20 @@ test('add recruit requires a graduation year: labelled, required, nothing writte
   act(() => root.unmount());
   assert.deepEqual(network, []);
 });
+
+test('showcase seed: default vote event has checked-in recruits and the dashboard shows sample votes', async () => {
+  const backend = ui.createShowcaseBackend({ latencyMs: 0 });
+  const root = mount(createElement(ui.DemoApp, { backend }));
+  await until(() => byText('h1', 'Recruitment overview'), 'admin dashboard');
+  assert.ok(byText('*', 'Bhayshul Tuten'));
+  assert.equal(/0\s*Votes/.test(document.body.textContent), false, 'sample votes are counted');
+  await go('/vote');
+  await until(() => byText('h1', 'Rate recruits'), 'vote page');
+  assert.equal(document.getElementById('vote-event').value, 'e-pro');
+  assert.equal(document.querySelectorAll('fieldset.rating').length, 9, 'checked-in recruits at the default event');
+  assert.equal(document.querySelectorAll('fieldset.rating input:checked').length, 0, 'demo admin ballot starts empty');
+  await click(document.querySelector('fieldset.rating input[aria-label^="9 for"]'));
+  await until(() => byText('.status-saved', 'Saved'), 'admin vote saved');
+  act(() => root.unmount());
+  assert.deepEqual(network, []);
+});

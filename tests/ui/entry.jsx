@@ -7,3 +7,4 @@ export { default as LiveApp } from '../../src/live/LiveApp.jsx'
 import { createDemoBackend as createBackend } from '../../src/demo/demoBackend.js'
 import { demoSeed } from '../helpers/legacyDemoSeed.js'
 export const createDemoBackend = options => createBackend({ ...options, seed: demoSeed })
+export const createShowcaseBackend = options => createBackend({ ...options })

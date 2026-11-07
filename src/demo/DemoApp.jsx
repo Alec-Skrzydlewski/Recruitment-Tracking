@@ -11,7 +11,7 @@ import { AppHeader } from '../components/ui'
 function DemoRibbon({ onReset }) {
   return (
     <div className="demo-ribbon" role="note">
-      <strong>Demo</strong> · example data; education and ratings are fictional · changes stay in this tab
+      <strong>Demo</strong> · example data; members, attendance, votes and education are fictional · changes stay in this tab
       <button type="button" onClick={onReset}>Reset</button>
     </div>
   )
