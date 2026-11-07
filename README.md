@@ -124,9 +124,14 @@ Implemented and covered by tests (`tests/code-gs-security.test.mjs`, `tests/code
 - **Idempotent creates.** Add recruit and add event take a `requestId`. The
   replay key is action + caller email + request ID and is checked and stored
   while the lock is held, after the admin re-check, so a cached replay never
-  bypasses a revocation. Known limit: if the cache entry is evicted (10 min),
-  a retry creates a second row; if two identical recruit uploads with a photo
-  race, a duplicate Drive file can be orphaned (the Sheet still gets one row).
+  bypasses a revocation. Replay protection is best-effort: entries are
+  stored with a 600-second expiry, but CacheService may evict them sooner, so
+  there is no guaranteed 10-minute window. After eviction a retry creates a
+  second row. Because Add recruit checks the cache before its Drive upload,
+  an entry that expires between that check and the lock can produce a second
+  row without its photo, and two racing identical uploads can orphan a Drive
+  file. The script lock serializes this app's own requests only, not direct
+  edits in the Sheet UI or other projects.
 - **HTTP headers** (`vercel.json`, tested in `tests/headers.test.mjs`):
   - The CSP allows only `self`, the Google Identity Services endpoints, and
     Apps Script, with no `unsafe-inline` or `unsafe-eval`.
@@ -168,8 +173,8 @@ Six sheets. Columns are located by header name; extra columns are allowed.
 - Attendance is sent as the desired state (`present: true/false`), so a
   replayed request can't flip it back.
 - Creating a recruit or event carries a `requestId`. A replay of the same
-  action by the same admin within 10 minutes returns the first result instead
-  of adding a second row (see *Idempotent creates* above for the limits).
+  action by the same admin normally returns the first result instead of
+  adding a second row; this is best-effort (see *Idempotent creates* above).
 - In the voting UI, writes for each recruit run one at a time and the last
   tap wins.
 
@@ -268,6 +273,7 @@ frontend, so deploy and verify the backend (step 1) before merging.
 | --- | --- |
 | `code-gs-security.test.mjs` | Token audience, issuer and expiry; fail-closed config; owner-only bootstrap and setup; the full authorization matrix; vote membership, existence and attendance checks; formula-text writes; reordered and duplicate headers; sanitized Drive errors; idempotency keyed by action, caller and request ID under the lock (concurrent, evicted and cross-action replays); admin revocation before the write lock (incl. after Drive work); desired-state attendance; the content-fingerprint wipe guard including same-count stale changes |
 | `code-gs.test.mjs` | Parity with the original behavior: vote upsert and dedupe, user management guards, schema setup, photo upload, sync, link and folder rules |
+| `responsive-css.test.mjs` | Phone layout guards (360–390px): file pickers cannot widen the page, header wraps into rows with one-line Sign out, admin tabs wrap, voting scale stays 2x5 |
 | `ui-flows.test.mjs` | Real React pages in jsdom against the demo backend: persona flow, vote save, rollback and retry, note-failure draft retention, wipe guard, reset. `fetch`, XHR, WebSocket, beacons and script injection are tripwires, and the tests assert zero network use. The unconfigured live app fails closed. |
 | `frontend-libs`, `demo-backend`, `api`, `headers`, … | Tally rules, the write queue, the photo cache, transport errors and timeouts, demo-rule parity, and the CSP |
 
