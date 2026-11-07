@@ -6,7 +6,7 @@ import {
   setPhotoScope, clearPhotoCache, photoCacheGet, photoCacheSet, photoCacheSize, fetchPhotos,
 } from '../src/lib/photoCache.js';
 
-test('tally counts only active votes and reports every exclusion', () => {
+test('tally counts only valid votes and has no excluded category', () => {
   const data = {
     recruits: [{ id: 'r1' }, { id: 'r2' }],
     events: [{ id: 'e1' }, { id: 'e2' }],
@@ -28,8 +28,9 @@ test('tally counts only active votes and reports every exclusion', () => {
   assert.equal(t.byRecruit.r1.byEvent.e1.count, 2);
   assert.equal(t.byRecruit.r1.byEvent.e1.average, 9);
   assert.equal(t.byRecruit.r2.average, null);
-  assert.deepEqual(t.excluded, { deletedRecruit: 1, deletedEvent: 1, notPresent: 1, invalidScore: 1 });
-  assert.equal(t.totalExcluded, 4);
+  // Malformed snapshot rows are never counted, and nothing reports them.
+  assert.deepEqual(Object.keys(t).sort(), ['activeVotes', 'byRecruit']);
+  assert.equal('excludedCount' in t.byRecruit.r1, false);
   assert.equal(t.activeVotes, 3);
   // Deleting an event removes its share of the average.
   const after = buildTally({ ...data, events: [{ id: 'e1' }] });

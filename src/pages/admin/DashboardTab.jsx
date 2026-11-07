@@ -24,28 +24,20 @@ export default function DashboardTab({ data, tally, ctl }) {
     return bv - av
   }), [data.recruits, tally])
 
-  const ex = tally.excluded
   return (
     <div>
       <div className="stats">
         <div className="stat"><div className="stat-value">{data.recruits.length}</div><div className="stat-label">Recruits</div></div>
         <div className="stat"><div className="stat-value">{data.events.length}</div><div className="stat-label">Events</div></div>
-        <div className="stat"><div className="stat-value">{tally.activeVotes}</div><div className="stat-label">Counted votes</div></div>
-        <div className="stat"><div className="stat-value">{tally.totalExcluded}</div><div className="stat-label">Excluded votes</div></div>
+        <div className="stat"><div className="stat-value">{tally.activeVotes}</div><div className="stat-label">Votes</div></div>
+        <div className="stat"><div className="stat-value">{(data.users || []).length}</div><div className="stat-label">Members</div></div>
       </div>
-      {tally.totalExcluded > 0 && (
-        <p className="small muted" style={{ marginBottom: 16 }}>
-          Averages count only votes for current recruits at current events they attended.
-          Excluded: {ex.deletedEvent} from deleted events, {ex.deletedRecruit} for removed recruits, {ex.notPresent} where attendance was removed, {ex.invalidScore} invalid.
-          They stay in the Sheet as history.
-        </p>
-      )}
       {ranked.length === 0 ? (
         <EmptyState title="No recruits yet">Add recruits on the Recruits tab to start tracking.</EmptyState>
       ) : (
         <div className="stack">
           {ranked.map((r, index) => {
-            const t = tally.byRecruit[r.id] || { average: null, activeCount: 0, voterCount: 0, byEvent: {}, excludedCount: 0 }
+            const t = tally.byRecruit[r.id] || { average: null, activeCount: 0, voterCount: 0, byEvent: {} }
             const status = ctl.noteStatus[r.id]
             const dirty = (ctl.noteDrafts[r.id] || '') !== (ctl.savedNotes[r.id] || '')
             const noteId = 'note-' + r.id
@@ -70,7 +62,6 @@ export default function DashboardTab({ data, tally, ctl }) {
                     {Object.keys(t.byEvent).map(eid => (
                       <span key={eid} className="badge badge-purple">{eventName[eid]}: {formatAverage(t.byEvent[eid].average)} ({t.byEvent[eid].count})</span>
                     ))}
-                    {t.excludedCount > 0 && <span className="badge">{t.excludedCount} excluded</span>}
                   </div>
                 )}
                 <label className="field-label" htmlFor={noteId}>Notes on {r.name}</label>

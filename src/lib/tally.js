@@ -1,10 +1,12 @@
 // One canonical tally used by the admin dashboard (live and demo).
 //
-// Active vote: score 1–10 for a recruit and event that both still exist and
-// where the recruit is marked present at that event. Active averages use only
-// active votes. Votes that reference a deleted event/recruit or an attendance
-// row that was removed are kept in the Sheet as history but excluded here, and
-// the dashboard shows how many were excluded so nothing disappears silently.
+// A vote counts when its score is an integer 1–10 for a recruit and event
+// that both exist and the recruit is marked present at that event. Deletes
+// and absences permanently delete the affected votes on the server, so valid
+// data never contains anything else. The checks below are only a defensive
+// guard against malformed or stale snapshots: such rows are never counted
+// and are not reported as a category. Existing malformed rows are removed by
+// the admin's explicit invalid-vote cleanup (Settings).
 
 function key(a, b) {
   return String(a) + '\u0000' + String(b);
@@ -23,18 +25,14 @@ export function buildTally(data) {
   const present = new Set(((data && data.attendance) || []).map(a => key(a.eventId, a.recruitId)));
   const byRecruit = {};
   recruits.forEach(r => {
-    byRecruit[String(r.id)] = { sum: 0, activeCount: 0, average: null, excludedCount: 0, voters: new Set(), byEvent: {} };
+    byRecruit[String(r.id)] = { sum: 0, activeCount: 0, average: null, voters: new Set(), byEvent: {} };
   });
-  const excluded = { deletedRecruit: 0, deletedEvent: 0, notPresent: 0, invalidScore: 0 };
   ((data && data.votes) || []).forEach(v => {
     const rid = String(v.recruitId);
     const eid = String(v.eventId);
     const score = validScore(v.score);
-    if (!recruitIds.has(rid)) { excluded.deletedRecruit += 1; return; }
+    if (!recruitIds.has(rid) || score === null || !eventIds.has(eid) || !present.has(key(eid, rid))) return;
     const entry = byRecruit[rid];
-    if (score === null) { excluded.invalidScore += 1; entry.excludedCount += 1; return; }
-    if (!eventIds.has(eid)) { excluded.deletedEvent += 1; entry.excludedCount += 1; return; }
-    if (!present.has(key(eid, rid))) { excluded.notPresent += 1; entry.excludedCount += 1; return; }
     entry.sum += score;
     entry.activeCount += 1;
     entry.voters.add(String(v.userEmail || '').toLowerCase());
@@ -52,9 +50,8 @@ export function buildTally(data) {
       ev.average = ev.sum / ev.count;
     });
   });
-  const totalExcluded = excluded.deletedRecruit + excluded.deletedEvent + excluded.notPresent + excluded.invalidScore;
   const activeVotes = Object.values(byRecruit).reduce((s, e) => s + e.activeCount, 0);
-  return { byRecruit, excluded, totalExcluded, activeVotes };
+  return { byRecruit, activeVotes };
 }
 
 export function formatAverage(avg) {

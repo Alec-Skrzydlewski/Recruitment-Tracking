@@ -71,6 +71,23 @@ export function createDemoBackend({ latencyMs = 120, seed = demoSeed } = {}) {
     return h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0') + ':' + json.length;
   };
 
+  const invalidVotes = () => {
+    const recruits = new Set(db.recruits.map(r => r.id));
+    const events = new Set(db.events.map(e => e.id));
+    const present = new Set(db.attendance.map(a => a.eventId + '\u0000' + a.recruitId));
+    const counts = { missingRecruit: 0, missingEvent: 0, notPresent: 0, invalidScore: 0 };
+    const indexes = [];
+    db.votes.forEach((v, i) => {
+      const n = Number(v.score);
+      const reason = !recruits.has(v.recruitId) ? 'missingRecruit'
+        : !events.has(v.eventId) ? 'missingEvent'
+          : !present.has(v.eventId + '\u0000' + v.recruitId) ? 'notPresent'
+            : (!Number.isInteger(n) || n < 1 || n > 10 || typeof v.score === 'boolean' || v.score === '' || v.score == null) ? 'invalidScore' : '';
+      if (reason) { counts[reason] += 1; indexes.push(i); }
+    });
+    return { indexes, counts };
+  };
+
   const handlers = {
     bootstrap: email => requireMember(email),
     getMe: email => requireMember(email),
@@ -128,8 +145,12 @@ export function createDemoBackend({ latencyMs = 120, seed = demoSeed } = {}) {
     deleteRecruit(email, body) {
       requireAdmin(email);
       const rid = id(body.id, 'id');
+      const before = db.votes.length;
       db.recruits = db.recruits.filter(r => r.id !== rid);
-      return { ok: true };
+      db.votes = db.votes.filter(v => v.recruitId !== rid);
+      db.attendance = db.attendance.filter(a => a.recruitId !== rid);
+      db.notes = db.notes.filter(n => n.recruitId !== rid);
+      return { ok: true, votesDeleted: before - db.votes.length };
     },
     uploadPhoto(email, body) {
       requireAdmin(email);
@@ -160,8 +181,11 @@ export function createDemoBackend({ latencyMs = 120, seed = demoSeed } = {}) {
     deleteEvent(email, body) {
       requireAdmin(email);
       const eid = id(body.id, 'id');
+      const before = db.votes.length;
       db.events = db.events.filter(e => e.id !== eid);
-      return { ok: true };
+      db.votes = db.votes.filter(v => v.eventId !== eid);
+      db.attendance = db.attendance.filter(a => a.eventId !== eid);
+      return { ok: true, votesDeleted: before - db.votes.length };
     },
     setAttendance(email, body) {
       requireAdmin(email);
@@ -171,8 +195,10 @@ export function createDemoBackend({ latencyMs = 120, seed = demoSeed } = {}) {
       if (!db.events.some(e => e.id === eventId)) throw fail('Event not found', 'NOT_FOUND');
       if (!db.recruits.some(r => r.id === recruitId)) throw fail('Recruit not found', 'NOT_FOUND');
       db.attendance = db.attendance.filter(a => !(a.eventId === eventId && a.recruitId === recruitId));
+      const before = db.votes.length;
       if (body.present) db.attendance.push({ eventId, recruitId });
-      return { ok: true, present: body.present };
+      else db.votes = db.votes.filter(v => !(v.eventId === eventId && v.recruitId === recruitId));
+      return { ok: true, present: body.present, votesDeleted: before - db.votes.length };
     },
     saveNote(email, body) {
       requireAdmin(email);
@@ -212,6 +238,24 @@ export function createDemoBackend({ latencyMs = 120, seed = demoSeed } = {}) {
         return { ok: true };
       }
       throw fail('Unknown user operation', 'INVALID');
+    },
+    // Mirrors Code.gs findInvalidVotes: criteria are fixed here, never sent.
+    getVoteCleanup(email) {
+      requireAdmin(email);
+      const found = invalidVotes();
+      return { count: found.indexes.length, byReason: found.counts, cycleFingerprint: fingerprint() };
+    },
+    cleanupInvalidVotes(email, body) {
+      requireAdmin(email);
+      if (body.confirm !== 'DELETE INVALID VOTES') throw fail('Confirm the invalid-vote cleanup.', 'INVALID');
+      if (!body.expectedFingerprint || !Number.isInteger(body.expectedCount) || body.expectedCount < 1) throw fail('Review the cleanup preview first.', 'INVALID');
+      const found = invalidVotes();
+      if (body.expectedFingerprint !== fingerprint() || found.indexes.length !== body.expectedCount) {
+        throw fail('Vote data changed since the preview. Review it again.', 'CONFLICT');
+      }
+      const drop = new Set(found.indexes);
+      db.votes = db.votes.filter((v, i) => !drop.has(i));
+      return { ok: true, deleted: drop.size, byReason: found.counts };
     },
     wipeCycle(email, body) {
       requireAdmin(email);

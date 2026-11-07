@@ -4,7 +4,7 @@ const FEATURES = [
   ['Server-side authorization', 'Every request is checked against the member list inside a lock. Votes must reference a real event and a recruit marked present.'],
   ['Google identity, bound to this app', 'The backend verifies Google ID tokens and rejects tokens issued to any other app. The first admin is a configured owner, never the first visitor.'],
   ['Spreadsheet-safe writes', 'All writes go through name-indexed columns and store formula-like text (=, +, -, @) as literal text.'],
-  ['Transparent tallies', 'Averages count only active votes; votes for deleted events or removed attendance stay as history and are reported, not silently dropped.'],
+  ['Transparent tallies', 'Averages count only valid votes from recruits marked present. Deleting a recruit or event, or marking a recruit absent, permanently deletes the affected votes.'],
   ['Resilient UI', 'Per-recruit write serialization (last tap wins), optimistic updates with rollback, timeouts without blind retries, and optional photos that never block core work.'],
   ['Tested and isolated', 'Node test suites cover the authorization matrix and regressions; this demo build is checked to contain no Google or backend endpoints.'],
 ]

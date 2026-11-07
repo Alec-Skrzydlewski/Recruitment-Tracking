@@ -134,6 +134,8 @@ const ADMIN_ACTIONS = {
   saveNote: { recruitId: 'rec-1', content: 'hi' },
   manageUser: { op: 'add', email: 'z@example.test' },
   wipeCycle: { confirm: 'WIPE CYCLE', expectedFingerprint: '0'.repeat(64) },
+  getVoteCleanup: {},
+  cleanupInvalidVotes: { confirm: 'DELETE INVALID VOTES', expectedFingerprint: '0'.repeat(64), expectedCount: 1 },
 };
 
 test('authorization matrix: non-members and inactive members reach nothing and write nothing', () => {
@@ -328,7 +330,10 @@ test('same-count stale wipe is refused: re-scored vote, edited note, delete+add'
   const changes = [
     () => post('castVote', 'owner', { eventId: 'evt-1', recruitId: 'rec-1', score: 2 }),
     () => post('saveNote', 'owner', { recruitId: 'rec-1', content: 'edited' }),
-    () => { post('deleteEvent', 'owner', { id: 'evt-2' }); post('addEvent', 'owner', { name: 'Case Night' }); },
+    () => {
+      post('setAttendance', 'owner', { eventId: 'evt-2', recruitId: 'rec-2', present: false });
+      post('setAttendance', 'owner', { eventId: 'evt-1', recruitId: 'rec-2', present: true });
+    },
   ];
   for (const change of changes) {
     const ss = fresh({ Votes: [['evt-1', 'rec-1', OWNER, 5, 't']], Notes: [['rec-1', 'orig', 't']] });
@@ -469,4 +474,151 @@ test('verifyToken binds audience directly', () => {
   assert.equal(api.verifyToken('t', 'other'), null);
   assert.equal(api.verifyToken('t', ''), null);
   assert.equal(api.verifyToken('t', CLIENT_ID).email, OWNER);
+});
+
+// ---------- permanent vote deletion (no excluded/history votes) ----------
+
+const V = (e, r, u, score) => [e, r, u, score, '2026-09-01T00:00:00.000Z'];
+const CASCADE_SEED = {
+  Recruits: [
+    ['rec-1', 'Avery Quill', 'Accountancy (BSAcc)', '', '2028', 'drive-photo-1', 'upload'],
+    ['rec-2', 'Blake Ember', 'Finance (BSBA)', '', '2027', '', ''],
+  ],
+  EventRecruits: [['evt-1', 'rec-1'], ['evt-1', 'rec-2'], ['evt-2', 'rec-1'], ['evt-2', 'rec-2']],
+  Votes: [
+    V('evt-1', 'rec-1', OWNER, 7), V('evt-1', 'rec-1', 'member@example.test', 8),
+    V('evt-1', 'rec-2', OWNER, 6), V('evt-2', 'rec-1', OWNER, 9), V('evt-2', 'rec-2', 'member@example.test', 5),
+  ],
+  Notes: [['rec-1', 'note one', 't'], ['rec-2', 'note two', 't']],
+};
+const pairs = (ss, name) => rowsOf(ss, name).slice(1).map(r => r.slice(0, 3).join('|'));
+
+test('deleting an event permanently deletes its votes and attendance; everything else intact', () => {
+  const ss = fresh(CASCADE_SEED);
+  const res = post('deleteEvent', 'owner', { id: 'evt-1' });
+  assert.equal(res.ok, true);
+  assert.equal(res.votesDeleted, 3);
+  assert.deepEqual(pairs(ss, 'Votes'), ['evt-2|rec-1|' + OWNER, 'evt-2|rec-2|member@example.test']);
+  assert.deepEqual(rowsOf(ss, 'EventRecruits').slice(1), [['evt-2', 'rec-1'], ['evt-2', 'rec-2']]);
+  assert.equal(rowsOf(ss, 'Recruits').length, 3);
+  assert.equal(rowsOf(ss, 'Notes').length, 3);
+  assert.deepEqual(rowsOf(ss, 'Events').slice(1).map(r => r[0]), ['evt-2']);
+});
+
+test('deleting a recruit deletes its votes, attendance and note; Drive files and others intact', () => {
+  const ss = fresh(CASCADE_SEED);
+  const drive = JSON.stringify(driveState);
+  const res = post('deleteRecruit', 'owner', { id: 'rec-1' });
+  assert.equal(res.votesDeleted, 3);
+  assert.deepEqual(pairs(ss, 'Votes'), ['evt-1|rec-2|' + OWNER, 'evt-2|rec-2|member@example.test']);
+  assert.deepEqual(rowsOf(ss, 'EventRecruits').slice(1), [['evt-1', 'rec-2'], ['evt-2', 'rec-2']]);
+  assert.deepEqual(rowsOf(ss, 'Notes').slice(1).map(r => r[0]), ['rec-2']);
+  assert.equal(rowsOf(ss, 'Events').length, 3);
+  assert.equal(JSON.stringify(driveState), drive, 'no Drive file deleted');
+});
+
+test('marking absent deletes only that pair\'s votes; marking present deletes nothing', () => {
+  const ss = fresh(CASCADE_SEED);
+  assert.equal(post('setAttendance', 'owner', { eventId: 'evt-1', recruitId: 'rec-1', present: true }).votesDeleted, 0);
+  assert.equal(rowsOf(ss, 'Votes').length, 6);
+  const res = post('setAttendance', 'owner', { eventId: 'evt-1', recruitId: 'rec-1', present: false });
+  assert.equal(res.votesDeleted, 2);
+  assert.deepEqual(pairs(ss, 'Votes'), ['evt-1|rec-2|' + OWNER, 'evt-2|rec-1|' + OWNER, 'evt-2|rec-2|member@example.test']);
+  assert.equal(rowsOf(ss, 'Notes').length, 3);
+});
+
+test('cascades re-check admin authority under the lock and write nothing after revocation', () => {
+  for (const [action, body] of [['deleteEvent', { id: 'evt-1' }], ['deleteRecruit', { id: 'rec-1' }], ['setAttendance', { eventId: 'evt-1', recruitId: 'rec-1', present: false }]]) {
+    const ss = fresh({ ...CASCADE_SEED, ...TWO_ADMINS });
+    token('second', 'second@example.test');
+    current.onLock = demoteSecond(ss);
+    const before = snapshot(ss);
+    assert.equal(post(action, 'second', body).code, 'FORBIDDEN', action);
+    for (const n of ['Recruits', 'Events', 'EventRecruits', 'Votes', 'Notes']) assert.deepEqual(snapshot(ss)[n], before[n], action + ' ' + n);
+  }
+});
+
+// ---------- invalid-vote cleanup (staged; never automatic) ----------
+
+const DIRTY_SEED = {
+  ...CASCADE_SEED,
+  Users: [
+    [OWNER, 'Owner', 'admin', 'yes'],
+    ['second@example.test', 'Second', 'admin', 'yes'],
+    ['member@example.test', 'Member', 'brother', 'yes'],
+    ['former@example.test', 'Former', 'brother', 'no'],
+  ],
+  Votes: [
+    ...CASCADE_SEED.Votes,
+    V('evt-1', 'rec-1', 'former@example.test', 4), // valid row by an inactive voter: kept
+    V('evt-1', 'rec-1', OWNER, 3), // duplicate weight: not a cleanup criterion, kept
+    V('evt-1', 'rec-gone', OWNER, 5), // missing recruit
+    V('evt-gone', 'rec-1', OWNER, 5), // missing event
+    V('evt-1', 'rec-1', 'stray@example.test', 11), // invalid score
+  ],
+  EventRecruits: [['evt-1', 'rec-1'], ['evt-1', 'rec-2'], ['evt-2', 'rec-2']], // evt-2/rec-1 vote lacks attendance
+};
+
+test('getVoteCleanup finds exactly the four criteria and never writes', () => {
+  const ss = fresh(DIRTY_SEED);
+  const before = snapshot(ss);
+  const writes = stats.writes;
+  const p = post('getVoteCleanup', 'owner');
+  assert.deepEqual(p.byReason, { missingRecruit: 1, missingEvent: 1, notPresent: 1, invalidScore: 1 });
+  assert.equal(p.count, 4);
+  assert.match(p.cycleFingerprint, /^[0-9a-f]{64}$/);
+  assert.equal(p.cycleFingerprint, post('getAdminData', 'owner').cycleFingerprint);
+  assert.deepEqual(snapshot(ss), before);
+  assert.equal(stats.writes, writes);
+});
+
+test('cleanupInvalidVotes deletes only the previewed invalid rows; valid rows intact', () => {
+  const ss = fresh(DIRTY_SEED);
+  const p = post('getVoteCleanup', 'owner');
+  assert.equal(post('cleanupInvalidVotes', 'owner', { expectedFingerprint: p.cycleFingerprint, expectedCount: 4 }).code, 'INVALID');
+  assert.equal(post('cleanupInvalidVotes', 'owner', { confirm: 'DELETE INVALID VOTES', expectedFingerprint: p.cycleFingerprint }).code, 'INVALID');
+  assert.equal(post('cleanupInvalidVotes', 'owner', { confirm: 'DELETE INVALID VOTES', expectedFingerprint: p.cycleFingerprint, expectedCount: 3 }).code, 'CONFLICT');
+  assert.equal(rowsOf(ss, 'Votes').length, 11);
+  const res = post('cleanupInvalidVotes', 'owner', {
+    confirm: 'DELETE INVALID VOTES', expectedFingerprint: p.cycleFingerprint, expectedCount: 4,
+    predicate: 'all', eventId: 'evt-2', // browser-supplied criteria are ignored
+  });
+  assert.equal(res.ok, true);
+  assert.equal(res.deleted, 4);
+  assert.deepEqual(pairs(ss, 'Votes'), [
+    'evt-1|rec-1|' + OWNER, 'evt-1|rec-1|member@example.test', 'evt-1|rec-2|' + OWNER,
+    'evt-2|rec-2|member@example.test', 'evt-1|rec-1|former@example.test', 'evt-1|rec-1|' + OWNER,
+  ]);
+  for (const n of ['Recruits', 'EventRecruits', 'Notes', 'Users']) assert.equal(rowsOf(ss, n).length, DIRTY_SEED[n].length + 1, n);
+  assert.equal(rowsOf(ss, 'Events').length, 3);
+  assert.equal(post('getVoteCleanup', 'owner').count, 0);
+});
+
+test('cleanup is refused if anything changed since the preview, or after revocation', () => {
+  let ss = fresh(DIRTY_SEED);
+  const p = post('getVoteCleanup', 'owner');
+  post('saveNote', 'owner', { recruitId: 'rec-2', content: 'changed' });
+  assert.equal(post('cleanupInvalidVotes', 'owner', { confirm: 'DELETE INVALID VOTES', expectedFingerprint: p.cycleFingerprint, expectedCount: 4 }).code, 'CONFLICT');
+  assert.equal(rowsOf(ss, 'Votes').length, 11);
+
+  ss = fresh(DIRTY_SEED);
+  token('second', 'second@example.test');
+  const p2 = post('getVoteCleanup', 'second');
+  current.onLock = () => { api.saveNote(ss, ADMIN, { recruitId: 'rec-2', content: 'race' }); };
+  assert.equal(post('cleanupInvalidVotes', 'second', { confirm: 'DELETE INVALID VOTES', expectedFingerprint: p2.cycleFingerprint, expectedCount: 4 }).code, 'CONFLICT');
+  current.onLock = demoteSecond(ss);
+  const p3 = post('getVoteCleanup', 'owner');
+  assert.equal(post('cleanupInvalidVotes', 'second', { confirm: 'DELETE INVALID VOTES', expectedFingerprint: p3.cycleFingerprint, expectedCount: 4 }).code, 'FORBIDDEN');
+  assert.equal(rowsOf(ss, 'Votes').length, 11);
+  assert.equal(post('getVoteCleanup', 'member').code, 'FORBIDDEN');
+});
+
+test('setup and admin reads never run the cleanup automatically', () => {
+  const ss = fresh(DIRTY_SEED);
+  const before = snapshot(ss);
+  post('getAdminData', 'owner');
+  post('getMe', 'owner');
+  post('getVoteData', 'member');
+  api.setupSchema(ss);
+  assert.deepEqual(snapshot(ss).Votes, before.Votes);
 });

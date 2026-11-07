@@ -124,14 +124,41 @@ test('demo: landing → voter persona → vote saves → admin sees it → wipe 
   await click(byText('.demo-ribbon button', 'Switch persona'));
   await click(byText('button.persona', 'Jordan Vale'));
   await until(() => byText('h1', 'Recruitment overview'), 'admin dashboard');
-  assert.ok(byText('.stat', 'Excluded votes'));
-  assert.ok(byText('p', 'from deleted events'), 'excluded history is explained');
+  assert.equal(/exclud/i.test(document.body.textContent), false, 'no excluded-vote category in the UI');
+
+  await click(byText('button[role="tab"]', 'Settings'));
+  assert.equal(/exclud|as history/i.test(document.body.textContent), false);
+  const votesBefore = backend.snapshot().votes.length;
+  await click(byText('button', 'Check for invalid votes'));
+  await until(() => byText('[role="status"] p', '1 invalid vote'), 'cleanup preview');
+  assert.equal(backend.snapshot().votes.length, votesBefore, 'checking does not delete');
+  await click(byText('button', 'Permanently delete 1 invalid vote'));
+  await until(() => byText('.banner', 'Permanently deleted 1 invalid vote'), 'cleanup done');
+  assert.equal(backend.snapshot().votes.length, votesBefore - 1);
+  assert.equal(backend.snapshot().votes.some(v => v.eventId === 'e-retired'), false);
+
+  await click(byText('button[role="tab"]', 'Events'));
+  const firstEvent = backend.snapshot().events[0];
+  const eventVotes = backend.snapshot().votes.filter(v => v.eventId === firstEvent.id).length;
+  const prompts = [];
+  const savedConfirm = globalThis.confirm;
+  window.confirm = globalThis.confirm = msg => { prompts.push(msg); return true; };
+  await click(document.querySelector(`button[aria-label="Delete event ${firstEvent.name}"]`));
+  await until(() => !backend.snapshot().events.some(e => e.id === firstEvent.id), 'event deleted');
+  window.confirm = globalThis.confirm = savedConfirm;
+  assert.match(prompts[0], new RegExp(`permanently deletes ${eventVotes} vote`));
+  assert.equal(backend.snapshot().votes.some(v => v.eventId === firstEvent.id), false);
 
   await click(byText('button[role="tab"]', 'Settings'));
   const wipeButton = byText('button', 'Wipe cycle data');
   assert.equal(wipeButton.disabled, true, 'wipe requires typed confirmation');
   await type(document.getElementById('wipe-confirm'), 'WIPE CYCLE');
   assert.equal(byText('button', 'Wipe cycle data').disabled, false);
+  // The event delete above changed cycle data since load: first attempt is
+  // refused and the page reloads; the second attempt uses the fresh state.
+  await click(byText('button', 'Wipe cycle data'));
+  await until(() => byText('.banner', 'Nothing was wiped'), 'stale wipe refused');
+  assert.ok(backend.snapshot().recruits.length > 0);
   await click(byText('button', 'Wipe cycle data'));
   await until(() => byText('.banner', 'Cycle wiped'), 'wipe done');
   assert.equal(backend.snapshot().recruits.length, 0);

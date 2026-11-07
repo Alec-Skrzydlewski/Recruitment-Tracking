@@ -79,10 +79,22 @@ export default function Admin() {
   }, [api, attempt])
 
   const wiping = !!saving.wipe
+  const [cleanup, setCleanup] = useState(null)
 
+  async function reloadAll() {
+    const fresh = await api('getAdminData')
+    fingerprintRef.current = fresh.cycleFingerprint || ''
+    commit(fresh)
+    const drafts = draftsFrom(fresh)
+    setNoteDrafts(drafts)
+    setSavedNotes(drafts)
+  }
+
+  // Wipe and invalid-vote cleanup are exclusive: they never overlap other writes.
+  const EXCLUSIVE = ['wipe', 'cleanup']
   function begin(key) {
-    if (key !== 'wipe' && inflight.current.has('wipe')) return false
-    if (key === 'wipe' && Object.keys(saving).length) return false
+    if (EXCLUSIVE.some(k => k !== key && inflight.current.has(k))) return false
+    if (EXCLUSIVE.includes(key) && Object.keys(saving).length) return false
     if (!inflight.current.begin(key)) return false
     setSaving(s => ({ ...s, [key]: true }))
     return true
@@ -154,8 +166,10 @@ export default function Admin() {
       }
     },
     deleteRecruit(r) {
-      if (isTempId(r.id) || !confirm(`Remove ${r.name}? Their past votes and notes stay in the Sheet as history.`)) return
-      optimistic(`del-recruit:${r.id}`, { type: 'removeById', collection: 'recruits', id: r.id }, () => api('deleteRecruit', { id: r.id }))
+      if (isTempId(r.id)) return
+      const votes = (dataRef.current.votes || []).filter(v => String(v.recruitId) === String(r.id)).length
+      if (!confirm(`Remove ${r.name}? This permanently deletes ${votes} vote${votes === 1 ? '' : 's'} for them, their attendance and their note. Their Drive photo file is kept. This cannot be undone.`)) return
+      optimistic(`del-recruit:${r.id}`, { type: 'deleteRecruit', id: r.id }, () => api('deleteRecruit', { id: r.id }))
     },
     async uploadPhoto(recruitId, prepared) {
       const key = 'photo:' + recruitId
@@ -226,12 +240,20 @@ export default function Admin() {
       }
     },
     deleteEvent(ev) {
-      if (isTempId(ev.id) || !confirm(`Delete ${ev.name}? Votes cast at this event stay in the Sheet but no longer count toward averages.`)) return
-      optimistic(`del-event:${ev.id}`, { type: 'removeById', collection: 'events', id: ev.id }, () => api('deleteEvent', { id: ev.id }))
+      if (isTempId(ev.id)) return
+      const votes = (dataRef.current.votes || []).filter(v => String(v.eventId) === String(ev.id)).length
+      if (!confirm(`Delete ${ev.name}? This permanently deletes ${votes} vote${votes === 1 ? '' : 's'} cast at this event and its attendance list. This cannot be undone.`)) return
+      optimistic(`del-event:${ev.id}`, { type: 'deleteEvent', id: ev.id }, () => api('deleteEvent', { id: ev.id }))
     },
     setAttendance(eventId, recruitId, present) {
       if (isTempId(eventId) || isTempId(recruitId)) return
-      optimistic(`att:${eventId}:${recruitId}`, { type: 'toggleAttendance', eventId, recruitId }, () => api('setAttendance', { eventId, recruitId, present }))
+      if (present) {
+        optimistic(`att:${eventId}:${recruitId}`, { type: 'toggleAttendance', eventId, recruitId }, () => api('setAttendance', { eventId, recruitId, present }))
+        return
+      }
+      const votes = (dataRef.current.votes || []).filter(v => String(v.eventId) === String(eventId) && String(v.recruitId) === String(recruitId)).length
+      if (votes && !confirm(`Mark absent? This permanently deletes ${votes} vote${votes === 1 ? '' : 's'} for this recruit at this event. This cannot be undone.`)) return
+      optimistic(`att:${eventId}:${recruitId}`, { type: 'markAbsent', eventId, recruitId }, () => api('setAttendance', { eventId, recruitId, present }))
     },
     noteDrafts, savedNotes, noteStatus,
     editNote(recruitId, value) {
@@ -269,14 +291,7 @@ export default function Admin() {
         setError('Finish the changes that are still saving, then try again.')
         return false
       }
-      const reload = async () => {
-        const fresh = await api('getAdminData')
-        fingerprintRef.current = fresh.cycleFingerprint || ''
-        commit(fresh)
-        const drafts = draftsFrom(fresh)
-        setNoteDrafts(drafts)
-        setSavedNotes(drafts)
-      }
+      const reload = reloadAll
       try {
         await api('wipeCycle', { confirm: confirmText, expectedFingerprint: fingerprintRef.current })
         await reload()
@@ -297,6 +312,42 @@ export default function Admin() {
         return false
       } finally {
         end('wipe')
+      }
+    },
+    cleanup,
+    // Read-only: asks the server which stored votes are invalid. Never writes.
+    async previewCleanup() {
+      try {
+        setCleanup(await api('getVoteCleanup'))
+      } catch (err) {
+        fail(err)
+      }
+    },
+    async runCleanup() {
+      const preview = cleanup
+      if (!preview || !preview.count) return false
+      if (!begin('cleanup')) {
+        setError('Finish the changes that are still saving, then try again.')
+        return false
+      }
+      try {
+        const res = await api('cleanupInvalidVotes', {
+          confirm: 'DELETE INVALID VOTES', expectedFingerprint: preview.cycleFingerprint, expectedCount: preview.count,
+        })
+        await reloadAll()
+        setCleanup(null)
+        setNotice(`Permanently deleted ${res.deleted} invalid vote${res.deleted === 1 ? '' : 's'}.`)
+        return true
+      } catch (err) {
+        if (err && err.code === 'CONFLICT') {
+          setCleanup(null)
+          setError('Vote data changed since the check. Nothing was deleted. Check again.')
+        } else {
+          fail(err)
+        }
+        return false
+      } finally {
+        end('cleanup')
       }
     },
     unmatched, photoWarning,

@@ -141,8 +141,9 @@ Implemented and covered by tests (`tests/code-gs-security.test.mjs`, `tests/code
     sign-in popup needs.
 
 Privacy notes: members' own scores are visible only to them; admins see all scores
-(needed for deliberation). Votes for deleted recruits/events are retained in the
-Sheet as history (see below) until the year-end wipe.
+(needed for deliberation). Deleting a recruit or event, or marking a recruit
+absent, permanently deletes the affected votes (see below). There is no vote
+archive or history.
 
 ## Data model and tally rules
 
@@ -157,16 +158,31 @@ Six sheets. Columns are located by header name; extra columns are allowed.
 | Votes | eventId, recruitId, userEmail, score (1–10), timestamp |
 | Notes | recruitId, content, updatedAt |
 
-**Active vs. historical votes** (`src/lib/tally.js`):
+**Votes and deletes** (`src/lib/tally.js`, `apps-script/Code.gs`):
 
-- An *active* vote has a 1–10 score for a recruit and an event that both
-  still exist, and the recruit is marked present at that event. Averages and
-  vote counts use active votes only.
-- Deleting a recruit or event removes only that row. Votes and notes that
-  reference it stay in the Sheet as history.
-- The dashboard shows how many votes were excluded and why: deleted event,
-  removed recruit, removed attendance, or invalid score. Nothing disappears
-  silently, and a mistaken delete never destroys scores.
+- A vote counts when it has an integer 1–10 score for a recruit and an event
+  that both exist, and the recruit is marked present at that event.
+- Deletes cascade and are permanent; nothing is kept as history:
+  - deleting an **event** deletes its votes and its attendance rows;
+  - deleting a **recruit** deletes their votes, attendance rows and note
+    (their Drive photo file is not deleted);
+  - marking a recruit **absent** deletes every vote for that recruit at that
+    event.
+  Each confirmation dialog states how many votes will be permanently deleted.
+  Votes by members who were later removed or demoted, and repeated votes,
+  are not deleted by these rules.
+- The tally still ignores any malformed row in the data it receives, as a
+  defensive check, but there is no "excluded votes" count or category.
+- **Invalid-vote cleanup** (Settings): data written before deletes cascaded
+  can contain votes for a missing recruit, a missing event, a recruit not
+  marked present, or with an invalid score. *Check for invalid votes*
+  (`getVoteCleanup`) is read-only and returns counts per reason plus the
+  cycle fingerprint. *Permanently delete N invalid votes*
+  (`cleanupInvalidVotes`) requires an active admin re-checked under the
+  write lock, the confirmation `DELETE INVALID VOTES`, and the previewed
+  fingerprint and count; any change since the preview is refused. The
+  criteria are computed on the server; the request cannot supply its own.
+  Cleanup never runs automatically on load, setup or deploy.
 
 **Idempotency and ordering:**
 
@@ -255,8 +271,14 @@ version **2**.
 3. Existing sheets are not migrated or rewritten. Name-indexed access reads
    the current headers. If a required column is missing, the owner runs
    **Initialize sheets** once.
-4. Rollback: redeploy the previous Apps Script version together with the
-   previous frontend build.
+4. Existing invalid votes (from before deletes cascaded) are **not** touched
+   by deploying or by **Initialize sheets**. After deploying, an admin may
+   run **Settings → Check for invalid votes**, review the counts, and only
+   then choose to delete them. Make a copy of the Sheet first if you want a
+   restore point; the app keeps none.
+5. Rollback: redeploy the previous Apps Script version together with the
+   previous frontend build. Votes already deleted by cascades or by the
+   cleanup are not restored by a rollback.
 
 The Apps Script backend is deployed by hand as described above; nothing in
 this repository's CI deploys it. The frontend is different: the repository
@@ -271,7 +293,7 @@ frontend, so deploy and verify the backend (step 1) before merging.
 
 | Suite | Covers |
 | --- | --- |
-| `code-gs-security.test.mjs` | Token audience, issuer and expiry; fail-closed config; owner-only bootstrap and setup; the full authorization matrix; vote membership, existence and attendance checks; formula-text writes; reordered and duplicate headers; sanitized Drive errors; idempotency keyed by action, caller and request ID under the lock (concurrent, evicted and cross-action replays); admin revocation before the write lock (incl. after Drive work); desired-state attendance; the content-fingerprint wipe guard including same-count stale changes |
+| `code-gs-security.test.mjs` | Token audience, issuer and expiry; fail-closed config; owner-only bootstrap and setup; the full authorization matrix; vote membership, existence and attendance checks; formula-text writes; reordered and duplicate headers; sanitized Drive errors; idempotency keyed by action, caller and request ID under the lock (concurrent, evicted and cross-action replays); admin revocation before the write lock (incl. after Drive work); desired-state attendance; the content-fingerprint wipe guard including same-count stale changes; permanent vote cascades on event/recruit delete and absence with unrelated rows and Drive files preserved; read-only invalid-vote preview and the locked, fingerprint- and count-bound cleanup of exactly the four criteria |
 | `code-gs.test.mjs` | Parity with the original behavior: vote upsert and dedupe, user management guards, schema setup, photo upload, sync, link and folder rules |
 | `responsive-css.test.mjs` | Phone layout guards (360–390px): file pickers cannot widen the page, header wraps into rows with one-line Sign out, admin tabs wrap, voting scale stays 2x5 |
 | `ui-flows.test.mjs` | Real React pages in jsdom against the demo backend: persona flow, vote save, rollback and retry, note-failure draft retention, wipe guard, reset. `fetch`, XHR, WebSocket, beacons and script injection are tripwires, and the tests assert zero network use. The unconfigured live app fails closed. |

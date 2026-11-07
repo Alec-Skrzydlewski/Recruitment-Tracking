@@ -66,3 +66,37 @@ test('photos are generated local SVGs', async () => {
   assert.deepEqual(Object.keys(res.photos), ['demo-photo-r-avery']);
   assert.match(res.photos['demo-photo-r-avery'], /^data:image\/svg\+xml/);
 });
+
+test('demo mirrors live: cascades delete votes, cleanup is staged and exact', async () => {
+  const b = createDemoBackend({ latencyMs: 0 });
+  // Seed has one stale vote for a missing event.
+  const preview = await b.call(ADMIN, 'getVoteCleanup');
+  assert.deepEqual(preview.byReason, { missingRecruit: 0, missingEvent: 1, notPresent: 0, invalidScore: 0 });
+  assert.equal(preview.count, 1);
+  const votesBefore = b.snapshot().votes.length;
+  assert.equal(b.snapshot().votes.length, votesBefore, 'preview does not write');
+  await assert.rejects(() => b.call(VOTER, 'getVoteCleanup'), /Admin only/);
+  await assert.rejects(() => b.call(ADMIN, 'cleanupInvalidVotes', { confirm: 'DELETE INVALID VOTES', expectedFingerprint: preview.cycleFingerprint, expectedCount: 2 }), /changed since/);
+  const done = await b.call(ADMIN, 'cleanupInvalidVotes', { confirm: 'DELETE INVALID VOTES', expectedFingerprint: preview.cycleFingerprint, expectedCount: 1 });
+  assert.equal(done.deleted, 1);
+  assert.equal(b.snapshot().votes.length, votesBefore - 1);
+  assert.equal((await b.call(ADMIN, 'getVoteCleanup')).count, 0);
+
+  const snap = b.snapshot();
+  const vote = snap.votes[0];
+  const pairVotes = snap.votes.filter(v => v.eventId === vote.eventId && v.recruitId === vote.recruitId).length;
+  const res = await b.call(ADMIN, 'setAttendance', { eventId: vote.eventId, recruitId: vote.recruitId, present: false });
+  assert.equal(res.votesDeleted, pairVotes);
+  assert.equal(b.snapshot().votes.length, snap.votes.length - pairVotes);
+
+  const ev = b.snapshot().events[0].id;
+  const evVotes = b.snapshot().votes.filter(v => v.eventId === ev).length;
+  assert.equal((await b.call(ADMIN, 'deleteEvent', { id: ev })).votesDeleted, evVotes);
+  assert.equal(b.snapshot().attendance.some(a => a.eventId === ev), false);
+
+  const rec = b.snapshot().recruits[0].id;
+  await b.call(ADMIN, 'deleteRecruit', { id: rec });
+  const after = b.snapshot();
+  assert.equal(after.votes.some(v => v.recruitId === rec) || after.attendance.some(a => a.recruitId === rec) || after.notes.some(n => n.recruitId === rec), false);
+  assert.equal((await b.call(ADMIN, 'getVoteCleanup')).count, 0, 'cascades never leave invalid votes');
+});

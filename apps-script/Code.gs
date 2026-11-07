@@ -52,6 +52,7 @@ const ADMIN_ACTIONS = {
   getAdminData: true, addRecruit: true, deleteRecruit: true, uploadPhoto: true,
   syncPhotoFolder: true, linkPhoto: true, addEvent: true, deleteEvent: true,
   setAttendance: true, saveNote: true, manageUser: true, wipeCycle: true,
+  getVoteCleanup: true, cleanupInvalidVotes: true,
 };
 
 function doPost(e) {
@@ -97,6 +98,8 @@ function dispatch(ss, user, config, action, body) {
     requireAdmin(ss, user);
     switch (action) {
       case 'getAdminData': return getAdminData(ss);
+      case 'getVoteCleanup': return getVoteCleanup(ss);
+      case 'cleanupInvalidVotes': return cleanupInvalidVotes(ss, user, body);
       case 'addRecruit': return addRecruit(ss, user, body);
       case 'deleteRecruit': return deleteRecruit(ss, user, body);
       case 'uploadPhoto': return uploadPhoto(ss, user, body);
@@ -650,20 +653,36 @@ function addRecruit(ss, user, body) {
   }));
 }
 
-// Deleting a recruit or event removes only that row. Votes, notes and
-// attendance that reference it are kept as history and excluded from active
-// tallies (see src/lib/tally.js), so a mistaken delete never destroys scores.
-function deleteById(ss, user, sheetName, body) {
+// Deleting a recruit or event permanently deletes the votes that reference
+// it and its attendance rows; deleting a recruit also deletes that recruit's
+// note. Drive photo files are never deleted. Nothing is kept as history.
+function deleteWhere(ss, sheetName, pred) {
+  const table = readTable(ss, sheetName);
+  const hits = findRows(table, pred);
+  deleteRowIndexes(table, hits);
+  return hits.length;
+}
+
+function deleteRecruit(ss, user, body) {
   const id = requireId(body && body.id, 'id');
   return withAdminLock(ss, user, () => {
-    const table = readTable(ss, sheetName);
-    deleteRowIndexes(table, findRows(table, row => String(row.id) === id));
-    return { ok: true };
+    const removed = deleteWhere(ss, 'Recruits', row => String(row.id) === id);
+    const votes = deleteWhere(ss, 'Votes', row => String(row.recruitId) === id);
+    deleteWhere(ss, 'EventRecruits', row => String(row.recruitId) === id);
+    deleteWhere(ss, 'Notes', row => String(row.recruitId) === id);
+    return { ok: true, removed: removed, votesDeleted: votes };
   });
 }
 
-function deleteRecruit(ss, user, body) { return deleteById(ss, user, 'Recruits', body); }
-function deleteEvent(ss, user, body) { return deleteById(ss, user, 'Events', body); }
+function deleteEvent(ss, user, body) {
+  const id = requireId(body && body.id, 'id');
+  return withAdminLock(ss, user, () => {
+    const removed = deleteWhere(ss, 'Events', row => String(row.id) === id);
+    const votes = deleteWhere(ss, 'Votes', row => String(row.eventId) === id);
+    deleteWhere(ss, 'EventRecruits', row => String(row.eventId) === id);
+    return { ok: true, removed: removed, votesDeleted: votes };
+  });
+}
 
 function addEvent(ss, user, body) {
   const name = requireText(body && body.name, LIMITS.name, 'Event name', true);
@@ -688,9 +707,15 @@ function setAttendance(ss, user, body) {
     const table = readTable(ss, 'EventRecruits');
     const hits = findRows(table, row => String(row.eventId) === eventId && String(row.recruitId) === recruitId);
     if (body.present && hits.length === 0) appendObject(table, { eventId: eventId, recruitId: recruitId });
-    if (!body.present && hits.length) deleteRowIndexes(table, hits);
+    let votesDeleted = 0;
+    if (!body.present) {
+      if (hits.length) deleteRowIndexes(table, hits);
+      // Votes require attendance: marking a recruit absent permanently deletes
+      // every vote for that recruit at that event.
+      votesDeleted = deleteWhere(ss, 'Votes', row => String(row.eventId) === eventId && String(row.recruitId) === recruitId);
+    }
     if (body.present && hits.length > 1) deleteRowIndexes(table, hits.slice(1));
-    return { ok: true, present: body.present };
+    return { ok: true, present: body.present, votesDeleted: votesDeleted };
   });
 }
 
@@ -705,6 +730,70 @@ function saveNote(ss, user, body) {
     if (hits.length) updateObject(table, hits[0], { content: content, updatedAt: updatedAt });
     else appendObject(table, { recruitId: recruitId, content: content, updatedAt: updatedAt });
     return { ok: true, updatedAt: updatedAt };
+  });
+}
+
+// ---------- invalid-vote repair ----------
+// Votes written before deletes cascaded can reference a missing recruit or
+// event, lack attendance, or carry an invalid score. The criteria live here
+// only; the browser cannot supply a predicate. Reading the preview never
+// writes. Cleanup is explicit, admin-only, under the lock, and bound to the
+// fingerprint and count the admin reviewed. It never runs automatically.
+
+const CLEANUP_CONFIRMATION = 'DELETE INVALID VOTES';
+
+function invalidVoteReason(vote, recruitIds, eventIds, present) {
+  if (SCHEMA.Votes.every(k => String(vote[k] == null ? '' : vote[k]).trim() === '')) return '';
+  const rid = String(vote.recruitId);
+  const eid = String(vote.eventId);
+  if (!recruitIds[rid]) return 'missingRecruit';
+  if (!eventIds[eid]) return 'missingEvent';
+  if (!present[eid + '\u0000' + rid]) return 'notPresent';
+  if (scoreValue(vote.score) === null) return 'invalidScore';
+  return '';
+}
+
+function findInvalidVotes(tables) {
+  const byName = {};
+  tables.forEach(t => { byName[t.name] = t; });
+  const recruitIds = {}, eventIds = {}, present = {};
+  tableRows(byName.Recruits).forEach(r => { recruitIds[String(r.id)] = true; });
+  tableRows(byName.Events).forEach(e => { eventIds[String(e.id)] = true; });
+  tableRows(byName.EventRecruits).forEach(a => { present[String(a.eventId) + '\u0000' + String(a.recruitId)] = true; });
+  const votes = byName.Votes;
+  const counts = { missingRecruit: 0, missingEvent: 0, notPresent: 0, invalidScore: 0 };
+  const indexes = findRows(votes, row => {
+    const reason = invalidVoteReason(row, recruitIds, eventIds, present);
+    if (reason) counts[reason] += 1;
+    return !!reason;
+  });
+  return { table: votes, indexes: indexes, counts: counts };
+}
+
+function getVoteCleanup(ss) {
+  const tables = readCycleTables(ss);
+  const found = findInvalidVotes(tables);
+  return { count: found.indexes.length, byReason: found.counts, cycleFingerprint: cycleFingerprint(tables) };
+}
+
+function cleanupInvalidVotes(ss, user, body) {
+  if (!body || body.confirm !== CLEANUP_CONFIRMATION) return errorResult('INVALID', 'Confirm the invalid-vote cleanup.');
+  const expected = String(body.expectedFingerprint || '');
+  const expectedCount = body.expectedCount;
+  if (!/^[0-9a-f]{64}$/.test(expected) || !Number.isInteger(expectedCount) || expectedCount < 1) {
+    return errorResult('INVALID', 'Review the cleanup preview first.');
+  }
+  return withAdminLock(ss, user, () => {
+    const tables = readCycleTables(ss);
+    if (cycleFingerprint(tables) !== expected) {
+      return errorResult('CONFLICT', 'Vote data changed since the preview. Review it again.');
+    }
+    const found = findInvalidVotes(tables);
+    if (found.indexes.length !== expectedCount) {
+      return errorResult('CONFLICT', 'Vote data changed since the preview. Review it again.');
+    }
+    deleteRowIndexes(found.table, found.indexes);
+    return { ok: true, deleted: found.indexes.length, byReason: found.counts };
   });
 }
 
@@ -1149,6 +1238,8 @@ if (typeof module !== 'undefined') {
     tableRows: tableRows,
     setupSchema: setupSchema,
     castVote: castVote,
+    getVoteCleanup: getVoteCleanup,
+    cleanupInvalidVotes: cleanupInvalidVotes,
     manageUser: manageUser,
     bootstrap: bootstrap,
     getMe: getMe,

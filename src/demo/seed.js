@@ -60,8 +60,8 @@ export function demoSeed() {
       });
     });
   });
-  // One historical vote for an event that was later deleted, so the dashboard
-  // can show how excluded votes are reported.
+  // One stale vote for an event that no longer exists (as if written before
+  // deletes cascaded), so the Settings invalid-vote cleanup can be tried.
   votes.push({ eventId: 'e-retired', recruitId: 'r-blake', userEmail: 'sam.member@example.test', score: 3, timestamp: '2026-09-01T19:00:00.000Z' });
   return {
     recruits: recruits.map(([id, name, major, secondMajor, gradYear, hasPhoto]) => ({
