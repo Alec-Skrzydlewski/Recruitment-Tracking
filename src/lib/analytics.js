@@ -239,15 +239,23 @@ export function fmt(x, digits = 2) {
   return x == null || Number.isNaN(x) ? '—' : Number(x).toFixed(digits)
 }
 
-function csvCell(v) {
+// Spreadsheet formula guard: if the first non-whitespace character
+// (spaces, tabs, CR/LF, NBSP and other Unicode spaces) is = + - @, or the
+// value starts with a tab/CR, prefix an apostrophe. The original text is kept
+// after the prefix. This reduces, but cannot guarantee against, formula
+// evaluation in every spreadsheet program.
+const FORMULA_START = /^[\s\u00a0\u2000-\u200b\u202f\u205f\u3000\ufeff]*[=+\-@]|^[\t\r]/
+
+export function csvCell(v) {
   const s = v == null ? '' : String(v)
-  const safe = /^[=+\-@\t\r]/.test(s) ? "'" + s : s
-  return /[",\n]/.test(safe) ? '"' + safe.replace(/"/g, '""') + '"' : safe
+  const safe = FORMULA_START.test(s) ? "'" + s : s
+  return /[",\r\n]/.test(safe) ? '"' + safe.replace(/"/g, '""') + '"' : safe
 }
 
 const num = (x, d = 2) => (x == null || Number.isNaN(x) ? '' : Number(x).toFixed(d))
 
-// Aggregates only: no individual ballots or voter identities.
+// Aggregates only: no individual ballots or voter identities. Still contains
+// recruits' names, majors, years and scores: private chapter data.
 export function rankCsv(rows) {
   const head = ['rank', 'tied', 'name', 'gradYear', 'major', 'secondMajor', 'ballots', 'uniqueVoters', 'mean', 'median', 'sd', 'min', 'max', 'eventsAttended', 'eventsRated', 'equalEventMean']
   const lines = rows.map(r => [

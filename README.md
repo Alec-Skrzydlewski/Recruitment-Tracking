@@ -210,7 +210,10 @@ the browser from the same admin snapshot as the dashboard
   with a scope line and **Reset filters**. No filters = the whole pool.
 - Recruit comparison: rank by mean (ties share a rank and are marked; no
   ballots = unranked), mean, median, ballots, unique voters, SD, range,
-  events attended / rated, equal-event mean. Sortable; CSV of aggregates.
+  events attended / rated, equal-event mean. Sortable; CSV of aggregates
+  (no voter identities, but it holds recruit names and scores: treat it as
+  private; formula-prefix guarding reduces but cannot rule out spreadsheet
+  formula evaluation).
 - Recruit detail: 1–10 histogram (with a table), per-event mean, median,
   SD, range, distribution and difference from the overall mean.
 - Event comparison in sheet order (events have no date, so no timeline) and

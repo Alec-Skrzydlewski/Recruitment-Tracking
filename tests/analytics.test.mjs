@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildAnalytics, sortRows, mean, median, sampleSd, histogram, rankCsv, filterOptions, filtersActive, EMPTY_FILTERS,
+  buildAnalytics, sortRows, csvCell, mean, median, sampleSd, histogram, rankCsv, filterOptions, filtersActive, EMPTY_FILTERS,
 } from '../src/lib/analytics.js';
 import { buildTally } from '../src/lib/tally.js';
 
@@ -173,4 +173,47 @@ test('CSV export is aggregate-only and formula-safe', () => {
   assert.ok(csv.includes(`"'=HYPERLINK(""x"")"`));
   assert.equal(/@x\.test/.test(csv), false, 'no voter identities');
   assert.ok(csv.split('\n').find(l => l.includes('Dee')).startsWith(',,Dee,'), 'unrated: no rank');
+});
+
+// Minimal RFC 4180 parser for round-trip checks.
+function parseCsv(text) {
+  const rows = [[]];
+  let cell = '';
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; } else if (c === '"') quoted = false; else cell += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ',') { rows.at(-1).push(cell); cell = ''; }
+    else if (c === '\n') { rows.at(-1).push(cell); cell = ''; rows.push([]); }
+    else cell += c;
+  }
+  if (cell || rows.at(-1).length) rows.at(-1).push(cell);
+  return rows.filter(r => r.length);
+}
+
+test('CSV: bare CR, LF, quotes and commas round-trip as one cell', () => {
+  for (const name of ['a\rb', 'a\nb', 'a\r\nb', 'say "hi", ok']) {
+    const data = fixture();
+    data.recruits[0].name = name;
+    const rows = parseCsv(rankCsv(buildAnalytics(data).rows));
+    const header = rows[0];
+    assert.ok(rows.slice(1).every(r => r.length === header.length), JSON.stringify(name));
+    assert.ok(rows.some(r => r[header.indexOf('name')] === name), JSON.stringify(name));
+  }
+  assert.equal(csvCell('a\rb'), '"a\rb"');
+});
+
+test('CSV: formula prefixes behind spaces, tabs and NBSP are neutralized, data preserved', () => {
+  for (const v of ['=1+1', ' =1+1', '\u00a0=1+1', '\u00a0 @SUM(A1)', '  +7', '\t-3', '\u3000=x', '\r=1']) {
+    const out = csvCell(v);
+    const parsed = parseCsv(out + '\n')[0][0];
+    assert.equal(parsed, "'" + v, JSON.stringify(v));
+  }
+  for (const v of ['Avery Quill', 'Finance (BSBA)', '2028', '7.50', 'a=b', 'x-y', '']) {
+    assert.equal(csvCell(v), v, JSON.stringify(v));
+  }
+  assert.equal(csvCell(null), '');
+  assert.equal(csvCell(7), '7');
 });
