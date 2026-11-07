@@ -132,8 +132,10 @@ export function createDemoBackend({ latencyMs = 120, seed = demoSeed } = {}) {
       const name = text(body.name, 120, 'Name', true);
       const major = text(body.major, 120, 'Major', true);
       const secondMajor = text(body.secondMajor, 120, 'Second major', false);
-      const gradYear = text(body.gradYear, 4, 'Graduation year', false);
-      if (gradYear && !/^\d{4}$/.test(gradYear)) throw fail('Graduation year must be a 4-digit year.', 'INVALID');
+      const gradYear = String(body.gradYear == null ? '' : body.gradYear).trim();
+      if (!gradYear) throw fail('Graduation year is required.', 'INVALID');
+      if (!/^\d{4}$/.test(gradYear)) throw fail('Graduation year must be a 4-digit year.', 'INVALID');
+      if (Number(gradYear) < 2000 || Number(gradYear) > 2100) throw fail('Graduation year is out of range.', 'INVALID');
       if (secondMajor && lower(secondMajor) === lower(major)) throw fail('Second major must be different from the major.', 'INVALID');
       return once(body.requestId, () => {
         const rid = newId('r');

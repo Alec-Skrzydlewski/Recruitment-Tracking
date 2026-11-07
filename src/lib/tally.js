@@ -8,11 +8,14 @@
 // and are not reported as a category. Existing malformed rows are removed by
 // the admin's explicit invalid-vote cleanup (Settings).
 
-function key(a, b) {
+export function key(a, b) {
   return String(a) + '\u0000' + String(b);
 }
 
-function validScore(score) {
+// Same rule as Code.gs scoreValue: an integer 1–10 (numeric strings allowed),
+// never a boolean, blank or null.
+export function validScore(score) {
+  if (typeof score === 'boolean' || score === null || score === undefined || String(score).trim() === '') return null;
   const n = Number(score);
   return Number.isInteger(n) && n >= 1 && n <= 10 ? n : null;
 }

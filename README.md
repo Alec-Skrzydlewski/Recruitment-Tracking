@@ -30,7 +30,7 @@ volunteer officer can operate it without servers, databases or a budget.
 | Role | Can do |
 | --- | --- |
 | Member | Choose an event, rate each recruit marked present (1–10). Sees only their own scores. |
-| Admin | Add or remove recruits, with optional photos. Create events and take attendance. Write notes. Manage members and admins. Review averages. Wipe a cycle at year end. |
+| Admin | Add or remove recruits (name, major and graduation year required; photo optional). Create events and take attendance. Write notes. Manage members and admins. Review averages and in-depth results on the **Analytics** tab. Wipe a cycle at year end. |
 | Owner (backend setting) | Initializes the Sheet schema and becomes the first admin of an empty deployment. |
 
 ## Architecture
@@ -194,6 +194,37 @@ Six sheets. Columns are located by header name; extra columns are allowed.
 - In the voting UI, writes for each recruit run one at a time and the last
   tap wins.
 
+**Graduation year** is required when adding a recruit: the server (and the
+demo) reject a missing, blank or non-4-digit year and anything outside the
+existing 2000–2100 range, before any Drive upload. The form offers the
+current year through eight years ahead. Existing rows without a year are
+not changed and still display; Analytics lists them as "Not recorded".
+
+## Analytics (admin only)
+
+`/admin?tab=analytics` (linkable; every admin tab uses `?tab=`). Computed in
+the browser from the same admin snapshot as the dashboard
+(`src/lib/analytics.js`); no new backend action, permission or service.
+
+- Filters: events, recruit name, graduation year, major (first or second),
+  with a scope line and **Reset filters**. No filters = the whole pool.
+- Recruit comparison: rank by mean (ties share a rank and are marked; no
+  ballots = unranked), mean, median, ballots, unique voters, SD, range,
+  events attended / rated, equal-event mean. Sortable; CSV of aggregates.
+- Recruit detail: 1–10 histogram (with a table), per-event mean, median,
+  SD, range, distribution and difference from the overall mean.
+- Event comparison in sheet order (events have no date, so no timeline) and
+  completion per event.
+- Participation: ballots, unique voters, voters not on the current active
+  list, and completion = unique (active member, event, present recruit)
+  ratings ÷ (active members × recruits present). The current list is a
+  stand-in for membership at voting time; this is stated on the page.
+- Definitions: valid ballot = the dashboard rule; mean weighs every ballot,
+  equal-event mean weighs every rated event; SD is the sample SD (n − 1);
+  "small" (< 3 ballots) is a reading aid, not a statistical test. No
+  composite scores, cut-offs, confidence intervals or trends from vote
+  timestamps (they record the last edit, not a history).
+
 ## Running locally
 
 Requires Node ≥ 20.19.
@@ -294,9 +325,10 @@ frontend, so deploy and verify the backend (step 1) before merging.
 | Suite | Covers |
 | --- | --- |
 | `code-gs-security.test.mjs` | Token audience, issuer and expiry; fail-closed config; owner-only bootstrap and setup; the full authorization matrix; vote membership, existence and attendance checks; formula-text writes; reordered and duplicate headers; sanitized Drive errors; idempotency keyed by action, caller and request ID under the lock (concurrent, evicted and cross-action replays); admin revocation before the write lock (incl. after Drive work); desired-state attendance; the content-fingerprint wipe guard including same-count stale changes; permanent vote cascades on event/recruit delete and absence with unrelated rows and Drive files preserved; read-only invalid-vote preview and the locked, fingerprint- and count-bound cleanup of exactly the four criteria |
-| `code-gs.test.mjs` | Parity with the original behavior: vote upsert and dedupe, user management guards, schema setup, photo upload, sync, link and folder rules |
+| `analytics.test.mjs` | Exact analytics values: mean/median/SD/histogram, unequal event counts, equal-event vs all-ballot mean, ties and unranked, duplicates and completion caps, inactive-voter retention, invalid rows, empty/zero denominators, filter semantics, CSV safety |
+| `code-gs.test.mjs` | Parity with the original behavior: vote upsert and dedupe, required graduation year (no write, no Drive upload) and legacy rows without one, user management guards, schema setup, photo upload, sync, link and folder rules |
 | `responsive-css.test.mjs` | Phone layout guards (360–390px): file pickers cannot widen the page, header wraps into rows with one-line Sign out, admin tabs wrap, voting scale stays 2x5 |
-| `ui-flows.test.mjs` | Real React pages in jsdom against the demo backend: persona flow, vote save, rollback and retry, note-failure draft retention, wipe guard, reset. `fetch`, XHR, WebSocket, beacons and script injection are tripwires, and the tests assert zero network use. The unconfigured live app fails closed. |
+| `ui-flows.test.mjs` | Real React pages in jsdom against the demo backend: persona flow, vote save, rollback and retry, note-failure draft retention, wipe guard, reset; Analytics tab (URL tab, ranks and ties, detail, filters and reset, admin-only redirect, read failure); required graduation year in the add form. `fetch`, XHR, WebSocket, beacons and script injection are tripwires, and the tests assert zero network use. The unconfigured live app fails closed. |
 | `frontend-libs`, `demo-backend`, `api`, `headers`, … | Tally rules, the write queue, the photo cache, transport errors and timeouts, demo-rule parity, and the CSP |
 
 The suites use a synthetic in-memory Sheets, Drive, Lock and Cache

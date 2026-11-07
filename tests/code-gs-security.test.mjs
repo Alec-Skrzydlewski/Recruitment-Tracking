@@ -123,7 +123,7 @@ test('setupSchema is owner-only and the only path that creates sheets', () => {
 const MEMBER_READS = ['getMe', 'getVoteData', 'getPhotos'];
 const ADMIN_ACTIONS = {
   getAdminData: {},
-  addRecruit: { name: 'Zed', major: 'X' },
+  addRecruit: { name: 'Zed', major: 'X', gradYear: '2028' },
   deleteRecruit: { id: 'rec-1' },
   uploadPhoto: { recruitId: 'rec-1', dataBase64: 'AAAA' },
   syncPhotoFolder: {},
@@ -216,7 +216,7 @@ test('formula-leading text is stored as literal text everywhere admins can type'
   const ss = fresh();
   stats.formulaWrites = 0;
   const evil = ['=1+1', '+SUM(A1)', '-2+3', '@cmd', '=HYPERLINK("https://x.example")'];
-  const created = api.addRecruit(ss, ADMIN, { name: evil[0], major: evil[1], secondMajor: evil[2] });
+  const created = api.addRecruit(ss, ADMIN, { name: evil[0], major: evil[1], secondMajor: evil[2], gradYear: '2028' });
   api.addEvent(ss, ADMIN, { name: evil[3] });
   api.saveNote(ss, ADMIN, { recruitId: created.id, content: evil[4] });
   api.manageUser(ss, { email: OWNER }, { op: 'add', email: 'n@example.test', name: '=cmd|"/c calc"!A0' });
@@ -291,8 +291,8 @@ test('addRecruit/addEvent with the same requestId create one row', () => {
   const b = post('addEvent', 'owner', { name: 'Mixer', requestId: 'req-1' });
   assert.equal(a.id, b.id);
   assert.equal(rowsOf(ss, 'Events').length, 4);
-  const r1 = post('addRecruit', 'owner', { name: 'Rory', major: 'X', requestId: 'req-2' });
-  const r2 = post('addRecruit', 'owner', { name: 'Rory', major: 'X', requestId: 'req-2' });
+  const r1 = post('addRecruit', 'owner', { name: 'Rory', major: 'X', gradYear: '2029', requestId: 'req-2' });
+  const r2 = post('addRecruit', 'owner', { name: 'Rory', major: 'X', gradYear: '2029', requestId: 'req-2' });
   assert.equal(r1.id, r2.id);
   assert.equal(rowsOf(ss, 'Recruits').length, 4);
 });
@@ -375,7 +375,7 @@ test('revocation before the write lock is acquired blocks every admin mutation',
     manageUser: () => ({ op: 'add', email: 'z@example.test' }),
     deleteRecruit: () => ({ id: 'rec-1' }),
     deleteEvent: () => ({ id: 'evt-1' }),
-    addRecruit: () => ({ name: 'Zed', major: 'X', photoDataBase64: 'AAAA' }),
+    addRecruit: () => ({ name: 'Zed', major: 'X', gradYear: '2027', photoDataBase64: 'AAAA' }),
     addEvent: () => ({ name: 'Late' }),
     setAttendance: () => ({ eventId: 'evt-1', recruitId: 'rec-2', present: true }),
     saveNote: () => ({ recruitId: 'rec-1', content: 'x' }),
@@ -450,7 +450,7 @@ test('different actions or different admins sharing a requestId are distinct req
   const ss = fresh(TWO_ADMINS);
   token('second', 'second@example.test');
   const e = post('addEvent', 'owner', { name: 'Shared', requestId: 'req-shared' });
-  const r = post('addRecruit', 'owner', { name: 'Shared', major: 'X', requestId: 'req-shared' });
+  const r = post('addRecruit', 'owner', { name: 'Shared', major: 'X', gradYear: '2029', requestId: 'req-shared' });
   const e2 = post('addEvent', 'second', { name: 'Shared', requestId: 'req-shared' });
   assert.ok(e.id && r.id && e2.id);
   assert.notEqual(e.id, r.id);

@@ -162,7 +162,7 @@ test('demo: landing → voter persona → vote saves → admin sees it → wipe 
   await click(byText('button', 'Wipe cycle data'));
   await until(() => byText('.banner', 'Cycle wiped'), 'wipe done');
   assert.equal(backend.snapshot().recruits.length, 0);
-  assert.equal(backend.snapshot().users.length, 5);
+  assert.equal(backend.snapshot().users.length, 8);
 
   await click(byText('.demo-ribbon button', 'Reset demo data'));
   await until(() => backend.snapshot().recruits.length === 6 && byText('h1', 'Recruitment overview'), 'reset');
@@ -218,6 +218,119 @@ test('demo: admin note save failure keeps the draft', async () => {
 test('live build without configuration fails closed and makes no requests', async () => {
   const root = mount(createElement(ui.LiveApp));
   await until(() => byText('h2', 'App not configured'), 'config screen');
+  act(() => root.unmount());
+  assert.deepEqual(network, []);
+});
+
+async function choose(el, value) {
+  const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set;
+  await act(async () => {
+    setter.call(el, value);
+    el.dispatchEvent(new window.Event('change', { bubbles: true }));
+  });
+}
+
+async function go(url) {
+  await act(async () => {
+    window.history.pushState(null, '', url);
+    window.dispatchEvent(new window.PopStateEvent('popstate'));
+  });
+}
+
+test('analytics: admin-only linkable tab with ranks, ties, detail, filters and reset', async () => {
+  const backend = ui.createDemoBackend({ latencyMs: 0 });
+  const root = mount(createElement(ui.DemoApp, { backend }));
+  await until(() => byText('button.persona', 'Jordan Vale'), 'landing');
+  await click(byText('button.persona', 'Jordan Vale'));
+  await until(() => byText('button[role="tab"]', 'Analytics'), 'admin tabs');
+  await click(byText('button[role="tab"]', 'Analytics'));
+  await until(() => byText('h2', 'Recruit comparison'), 'analytics');
+  assert.equal(new URLSearchParams(window.location.search).get('tab'), 'analytics', 'tab is linkable');
+  assert.equal(byText('button[role="tab"]', 'Analytics').getAttribute('aria-selected'), 'true');
+
+  const table = document.querySelector('[aria-label="Recruit comparison table"] table');
+  const bodyRows = [...table.querySelectorAll('tbody tr')];
+  assert.equal(bodyRows.length, 6);
+  assert.match(bodyRows[0].textContent, /^1Avery Quill/);
+  const tied = bodyRows.filter(r => r.textContent.includes('tied'));
+  assert.equal(tied.length, 2, 'Casey and Emerson share rank 2');
+  assert.ok(tied.every(r => r.textContent.startsWith('2tied')));
+  assert.equal(/exclud/i.test(document.body.textContent), false);
+  assert.ok(byText('summary', 'Methodology'));
+  assert.ok(byText('p', 'not a timeline'));
+  assert.ok(document.querySelector('figure.hist table'), 'chart has a data table fallback');
+
+  // Sorting by name toggles aria-sort.
+  const nameHeader = [...table.querySelectorAll('th')].find(th => th.textContent === 'Recruit');
+  await click(nameHeader.querySelector('button'));
+  assert.equal(nameHeader.getAttribute('aria-sort'), 'ascending');
+
+  // Recruit detail.
+  await click(document.querySelector('button[aria-label="Show details for Finley Moss"]'));
+  await until(() => byText('h2', 'Recruit detail: Finley Moss'), 'detail');
+  const perEvent = document.querySelector('[aria-label="Per-event results for Finley Moss"] table');
+  assert.ok(perEvent.textContent.includes('Professional Night'));
+
+  // Event filter narrows ballots; reset restores the whole pool.
+  const status = () => document.querySelector('.analytics [role="status"]').textContent;
+  assert.match(status(), /Showing 6 of 6 recruits across 3 events · 39 valid ballots\. No filters/);
+  const info = [...document.querySelectorAll('.chips label')].find(l => l.textContent === 'Info Night');
+  await click(info.querySelector('input'));
+  assert.match(status(), /across 1 event · 17 valid ballots\. Filters are on/);
+  await type(document.getElementById('an-search'), 'blake');
+  assert.match(status(), /Showing 1 of 6 recruits/);
+  await click(byText('button', 'Reset filters'));
+  assert.match(status(), /Showing 6 of 6 recruits across 3 events/);
+  assert.equal(document.getElementById('an-search').value, '');
+
+  act(() => root.unmount());
+  assert.deepEqual(network, []);
+});
+
+test('analytics: voters cannot reach it; an admin read failure shows an error, not empty stats', async () => {
+  const backend = ui.createDemoBackend({ latencyMs: 0 });
+  let root = mount(createElement(ui.DemoApp, { backend }));
+  await until(() => byText('button.persona', 'Riley Brooks'), 'landing');
+  await click(byText('button.persona', 'Riley Brooks'));
+  await until(() => byText('h1', 'Rate recruits'), 'vote page');
+  await go('/admin?tab=analytics');
+  await until(() => window.location.pathname === '/vote', 'voter redirected');
+  assert.equal(document.body.textContent.includes('Recruit comparison'), false);
+  act(() => root.unmount());
+
+  const failing = { ...backend, call(email, action, extra) { return action === 'getAdminData' ? Promise.reject(new Error('The server is busy. Try again in a moment.')) : backend.call(email, action, extra); } };
+  root = mount(createElement(ui.DemoApp, { backend: failing }));
+  await until(() => byText('button.persona', 'Jordan Vale'), 'landing');
+  await click(byText('button.persona', 'Jordan Vale'));
+  await until(() => byText('h2, h1', "Couldn't load admin data") || byText('*', "Couldn't load admin data"), 'read failure');
+  assert.equal(document.body.textContent.includes('Recruit comparison'), false);
+  act(() => root.unmount());
+  assert.deepEqual(network, []);
+});
+
+test('add recruit requires a graduation year: labelled, required, nothing written without it', async () => {
+  const backend = ui.createDemoBackend({ latencyMs: 0 });
+  const root = mount(createElement(ui.DemoApp, { backend }));
+  await until(() => byText('button.persona', 'Jordan Vale'), 'landing');
+  await click(byText('button.persona', 'Jordan Vale'));
+  await until(() => byText('button[role="tab"]', 'Recruits'), 'admin');
+  await click(byText('button[role="tab"]', 'Recruits'));
+  const year = await until(() => document.getElementById('recruit-year'), 'form');
+  assert.equal(year.required, true);
+  assert.equal(document.querySelector('label[for="recruit-year"]').textContent, 'Graduation year');
+  assert.equal(/optional/i.test(document.querySelector('label[for="recruit-year"]').textContent), false);
+  await type(document.getElementById('recruit-name'), 'Harper Vance');
+  await choose(document.getElementById('recruit-major'), document.querySelector('#recruit-major option:not([value=""])').value);
+  const before = backend.snapshot().recruits.length;
+  const form = year.closest('form');
+  await act(async () => { form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true })); });
+  await until(() => byText('[role="alert"]', 'Graduation year is required'), 'year error');
+  assert.equal(backend.snapshot().recruits.length, before, 'nothing written');
+  const y = year.querySelector('option:not([value=""])').value;
+  await choose(year, y);
+  await act(async () => { form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true })); });
+  await until(() => backend.snapshot().recruits.length === before + 1, 'added');
+  assert.equal(backend.snapshot().recruits.at(-1).gradYear, y);
   act(() => root.unmount());
   assert.deepEqual(network, []);
 });

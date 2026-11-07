@@ -128,11 +128,19 @@ test('addRecruit writes trimmed fields by header name, including reordered heade
 test('addRecruit rejects invalid fields without writing', () => {
   const ss = workspace();
   const before = rowsOf(ss, 'Recruits');
-  assert.throws(() => api.addRecruit(ss, ADMIN, { name: '', major: 'X' }), /Name is required/);
+  assert.throws(() => api.addRecruit(ss, ADMIN, { name: '', major: 'X', gradYear: '2028' }), /Name is required/);
   assert.throws(() => api.addRecruit(ss, ADMIN, { name: 'A', major: '' }), /Major is required/);
-  assert.throws(() => api.addRecruit(ss, ADMIN, { name: 'A'.repeat(121), major: 'X' }), /too long/);
+  assert.throws(() => api.addRecruit(ss, ADMIN, { name: 'A'.repeat(121), major: 'X', gradYear: '2028' }), /too long/);
+  // Graduation year is required: missing, blank, non-4-digit and out of the existing 2000–2100 range.
+  for (const gradYear of [undefined, '', '   ', '28', '20288', 'abcd', '1999', '2101', '20.8']) {
+    assert.throws(() => api.addRecruit(ss, ADMIN, { name: 'A', major: 'X', gradYear }), /Graduation year/, String(gradYear));
+  }
+  assert.equal(api.addRecruit(ss, ADMIN, { name: 'Edge', major: 'X', gradYear: '2000' }).id != null, true);
+  assert.equal(api.addRecruit(ss, ADMIN, { name: 'Edge2', major: 'X', gradYear: 2100 }).id != null, true);
+  api.deleteRecruit(ss, ADMIN, { id: rowsOf(ss, 'Recruits').at(-1)[0] });
+  api.deleteRecruit(ss, ADMIN, { id: rowsOf(ss, 'Recruits').at(-1)[0] });
   assert.throws(() => api.addRecruit(ss, ADMIN, { name: 'A', major: 'X', gradYear: '27' }), /4-digit/);
-  assert.equal(api.addRecruit(ss, ADMIN, { name: 'A', major: 'Finance', secondMajor: 'finance' }).code, 'INVALID');
+  assert.equal(api.addRecruit(ss, ADMIN, { name: 'A', major: 'Finance', secondMajor: 'finance', gradYear: '2028' }).code, 'INVALID');
   assert.deepEqual(rowsOf(ss, 'Recruits'), before);
 });
 
@@ -149,8 +157,23 @@ test('addRecruit stores an optional upload and deleteRecruit leaves the Drive fi
   assert.equal(rowsOf(ss, 'Recruits').length, 3);
   assert.ok(driveState.files[created.photoFileId]);
   assert.equal(driveState.trashCalls, 0);
-  assert.throws(() => api.addRecruit(ss, ADMIN, { name: 'Big', major: 'X', photoDataBase64: 'a'.repeat(500001) }), /too large/);
+  assert.throws(() => api.addRecruit(ss, ADMIN, { name: 'Big', major: 'X', gradYear: '2027', photoDataBase64: 'a'.repeat(500001) }), /too large/);
   assert.equal(rowsOf(ss, 'Recruits').length, 3);
+  // A missing year is rejected before any Drive upload.
+  const files = Object.keys(driveState.files).length;
+  assert.throws(() => api.addRecruit(ss, ADMIN, { name: 'NoYear', major: 'X', photoDataBase64: Buffer.from('p').toString('base64') }), /Graduation year is required/);
+  assert.equal(Object.keys(driveState.files).length, files);
+  assert.equal(rowsOf(ss, 'Recruits').length, 3);
+});
+
+test('legacy recruits without a graduation year still read safely, unchanged', () => {
+  const ss = workspace();
+  const data = plain(api.getAdminData(ss));
+  assert.equal(data.recruits.find(r => r.id === 'rec-1').gradYear, '2028');
+  const legacy = workspace({ Recruits: [['rec-old', 'Old Row', 'Finance (BSBA)', '', '', '', '']] });
+  const before = rowsOf(legacy, 'Recruits');
+  assert.equal(plain(api.getAdminData(legacy)).recruits[0].gradYear, '');
+  assert.deepEqual(rowsOf(legacy, 'Recruits'), before);
 });
 
 test('uploadPhoto is admin-only and getPhotos will not read arbitrary files', () => {

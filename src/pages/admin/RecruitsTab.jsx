@@ -54,6 +54,7 @@ export default function RecruitsTab({ data, ctl }) {
     const secondMajor = optionValue(secondChoice, secondCustom)
     if (!name.trim()) return setFormError('Name is required.')
     if (!major) return setFormError('Major is required.')
+    if (!/^\d{4}$/.test(gradYear.trim())) return setFormError('Graduation year is required.')
     if (secondMajor && secondMajor.toLowerCase() === major.toLowerCase()) return setFormError('Second major must be different from the major.')
     let prepared = null
     try {
@@ -93,9 +94,9 @@ export default function RecruitsTab({ data, ctl }) {
             <input id="recruit-name" value={name} onChange={e => { setFormError(''); setName(e.target.value) }} required maxLength={120} autoComplete="off" />
           </div>
           <div>
-            <label className="field-label" htmlFor="recruit-year">Graduation year <span className="muted">(optional)</span></label>
-            <select id="recruit-year" value={gradYear} onChange={e => setGradYear(e.target.value)}>
-              <option value="">Not set</option>
+            <label className="field-label" htmlFor="recruit-year">Graduation year</label>
+            <select id="recruit-year" value={gradYear} onChange={e => { setFormError(''); setGradYear(e.target.value) }} required aria-required="true">
+              <option value="" disabled>Select year</option>
               {years.map(y => <option key={y} value={String(y)}>{y}</option>)}
             </select>
           </div>

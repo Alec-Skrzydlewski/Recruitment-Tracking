@@ -218,10 +218,12 @@ function normalizeEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
 }
 
+// Required for new recruits. Range 2000–2100 is the pre-existing bound.
+// Existing rows without a year are still read as-is (never backfilled).
 function validGradYear(value) {
   const text = cleanText(value, 4);
-  if (text === '' ) return '';
-  if (!text || !/^\d{4}$/.test(text)) throw appError('INVALID', 'Graduation year must be a 4-digit year.');
+  if (text === '') throw appError('INVALID', 'Graduation year is required.');
+  if (!/^\d{4}$/.test(text)) throw appError('INVALID', 'Graduation year must be a 4-digit year.');
   const n = Number(text);
   if (n < 2000 || n > 2100) throw appError('INVALID', 'Graduation year is out of range.');
   return text;
