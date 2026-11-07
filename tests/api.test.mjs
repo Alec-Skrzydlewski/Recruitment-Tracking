@@ -98,3 +98,11 @@ test('stored token is dropped when its exp is in the past', () => {
   const kept = readStoredSession(memoryStorage({ google_token: fresh }), 1_700_000_000_000);
   assert.equal(kept.token, fresh);
 });
+
+test('photo diagnostic token is kept only when it is a bounded step/CATEGORY pair', async () => {
+  const call = diagnostic => callApi('syncPhotoFolder', 't', {}, URL_, { fetchImpl: async () => response({ error: 'x', code: 'PHOTO_UNAVAILABLE', diagnostic }) });
+  await assert.rejects(() => call('openSheetFile/SCOPE_NOT_GRANTED'), err => err.diagnostic === 'openSheetFile/SCOPE_NOT_GRANTED');
+  for (const bad of ['You do not have permission to call DriveApp', 'a/b c', 42, { x: 1 }, '<img src=x>/X']) {
+    await assert.rejects(() => call(bad), err => err.code === 'PHOTO_UNAVAILABLE' && err.diagnostic === undefined);
+  }
+});

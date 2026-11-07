@@ -164,6 +164,10 @@ export function createDemoBackend({ latencyMs = 120, seed = demoSeed } = {}) {
       recruit.photoSource = 'upload';
       return { ok: true, photoFileId: recruit.photoFileId, photoSource: 'upload' };
     },
+    checkPhotoAccess(email) {
+      requireAdmin(email);
+      return { ok: true, sheetFile: true, parentFolder: true, photoFolder: false, imageCount: 0, demo: true };
+    },
     syncPhotoFolder(email) {
       requireAdmin(email);
       return { linked: [], unmatched: [], demo: true };

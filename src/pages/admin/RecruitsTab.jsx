@@ -168,7 +168,9 @@ export default function RecruitsTab({ data, ctl }) {
         </p>
         <div className="row">
           <button type="button" onClick={ctl.syncPhotos} disabled={!!ctl.saving['sync-photos'] || disabled}>Sync photo folder</button>
+          {ctl.mode !== 'demo' && <button type="button" onClick={ctl.checkPhotoAccess} disabled={!!ctl.saving['check-photos'] || disabled}>Check Drive access</button>}
           {ctl.saving['sync-photos'] && <SavingPill label="Checking folder…" />}
+          {ctl.saving['check-photos'] && <SavingPill label="Checking Drive…" />}
         </div>
         {ctl.unmatched && (
           <div className="stack" style={{ marginTop: 12 }}>

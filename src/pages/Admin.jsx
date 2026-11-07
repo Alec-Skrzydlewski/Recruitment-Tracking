@@ -34,6 +34,10 @@ function requestId() {
   return 'req-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)
 }
 
+function photoText(err) {
+  return errorText(err) + (err && err.diagnostic ? ` (Diagnostic: ${err.diagnostic})` : '')
+}
+
 export default function Admin() {
   const runtime = useRuntime()
   const { api, me, loadPhotos, mode } = runtime
@@ -188,7 +192,7 @@ export default function Admin() {
           commit({ ...dataRef.current, recruits: dataRef.current.recruits.map(r => (String(r.id) === String(recruitId) ? { ...r, photoFileId: res.photoFileId, photoSource: 'upload' } : r)) })
         }
       } catch (err) {
-        if (err && err.code === 'PHOTO_UNAVAILABLE') setPhotoWarning(errorText(err))
+        if (err && err.code === 'PHOTO_UNAVAILABLE') setPhotoWarning(photoText(err))
         else fail(err)
       } finally {
         end(key)
@@ -211,9 +215,23 @@ export default function Admin() {
         setUnmatched((res && res.unmatched) || [])
         setNotice(linked.length ? `Linked ${linked.length} photo${linked.length === 1 ? '' : 's'} from the folder.` : 'Photo folder checked. Nothing new to link automatically.')
       } catch (err) {
-        setPhotoWarning(errorText(err))
+        setPhotoWarning(photoText(err))
       } finally {
         end('sync-photos')
+      }
+    },
+    async checkPhotoAccess() {
+      if (!begin('check-photos')) return
+      setPhotoWarning(null)
+      try {
+        const res = await api('checkPhotoAccess')
+        setNotice(!res || !res.parentFolder ? 'Drive access works, but the Sheet has no parent folder for photos.'
+          : res.photoFolder ? `Drive access works. Photo folder found with ${res.imageCount} image${res.imageCount === 1 ? '' : 's'}.`
+          : 'Drive access works. The "Recruit Photos" folder does not exist yet; Sync photo folder will create it.')
+      } catch (err) {
+        setPhotoWarning(photoText(err))
+      } finally {
+        end('check-photos')
       }
     },
     async linkPhoto(fileId, recruitId) {

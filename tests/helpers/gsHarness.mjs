@@ -108,16 +108,19 @@ export const props = {};
 export const current = { ss: null, lockFails: false, tokeninfoDown: false, lockHeld: false, onLock: null };
 export const cacheLog = [];
 
+export const warnLog = [];
+
 export const driveState = {
   files: {}, folders: {}, blobReads: 0, fileLookups: 0, getFilesCalls: 0,
-  createFolderCalls: 0, sharingCalls: 0, trashCalls: 0, seq: 0, deny: false,
+  createFolderCalls: 0, sharingCalls: 0, trashCalls: 0, seq: 0, deny: false, throwOn: {},
 };
 
 export function resetDrive() {
   Object.assign(driveState, {
     files: {}, folders: {}, blobReads: 0, fileLookups: 0, getFilesCalls: 0,
-    createFolderCalls: 0, sharingCalls: 0, trashCalls: 0, seq: 0, deny: false,
+    createFolderCalls: 0, sharingCalls: 0, trashCalls: 0, seq: 0, deny: false, throwOn: {},
   });
+  warnLog.length = 0;
   delete props.PHOTO_FOLDER_ID;
   driveState.folders['parent-1'] = { id: 'parent-1', name: 'Workspace', parentIds: [], fileIds: ['test-sheet'], folderIds: [] };
   driveState.folders['parent-2'] = { id: 'parent-2', name: 'Other', parentIds: [], fileIds: ['test-sheet'], folderIds: [] };
@@ -134,6 +137,8 @@ function iterator(items) {
   };
 }
 
+function maybeThrow(op) { if (driveState.throwOn && driveState.throwOn[op]) throw new Error(driveState.throwOn[op]); }
+
 function noteSharing() { driveState.sharingCalls += 1; }
 function noteTrash() { driveState.trashCalls += 1; }
 
@@ -146,7 +151,7 @@ function fileApi(record) {
       driveState.blobReads += 1;
       return { getBytes() { return record.bytes; }, getContentType() { return record.mime || 'image/jpeg'; }, getName() { return record.name; } };
     },
-    getParents() { return iterator(record.parentIds.map(id => folderApi(driveState.folders[id]))); },
+    getParents() { maybeThrow('getParents'); return iterator(record.parentIds.map(id => folderApi(driveState.folders[id]))); },
     setSharing: noteSharing, addViewer: noteSharing, setTrashed: noteTrash,
   };
 }
@@ -156,13 +161,16 @@ function folderApi(record) {
     getId() { return record.id; },
     getName() { return record.name; },
     getFiles() {
+      maybeThrow('getFiles');
       driveState.getFilesCalls += 1;
       return iterator(record.fileIds.map(id => fileApi(driveState.files[id])));
     },
     getFoldersByName(name) {
+      maybeThrow('getFoldersByName');
       return iterator(record.folderIds.map(id => driveState.folders[id]).filter(f => f && f.name === name).map(folderApi));
     },
     createFolder(name) {
+      maybeThrow('createFolder');
       driveState.createFolderCalls += 1;
       driveState.seq += 1;
       const id = 'folder-' + driveState.seq;
@@ -172,6 +180,7 @@ function folderApi(record) {
       return folderApi(folder);
     },
     createFile(blob) {
+      maybeThrow('createFile');
       driveState.seq += 1;
       const id = 'upload-' + driveState.seq;
       driveState.files[id] = { id, name: blob.getName(), mime: blob.getContentType(), bytes: blob.getBytes(), parentIds: [record.id] };
@@ -204,7 +213,7 @@ let uuidN = 0;
 
 const sandbox = {
   module: { exports: {} },
-  console: { error() {}, log() {} },
+  console: { error() {}, log() {}, warn(...args) { warnLog.push(args.map(String).join(' ')); } },
   SpreadsheetApp: {
     getActiveSpreadsheet() {
       if (!current.ss) throw new Error('no active spreadsheet');
