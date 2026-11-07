@@ -1,3 +1,4 @@
+import { formatEventDate } from '../../lib/eventDate'
 import { useMemo, useState } from 'react'
 import { buildRecruitAnalytics, recruitChoices, resolveSelection, recruitCsv, fmt, SMALL_SAMPLE } from '../../lib/analytics'
 
@@ -110,7 +111,7 @@ export default function AnalyticsTab({ data }) {
       <section className="card" aria-labelledby="an-events">
         <h2 id="an-events">By event</h2>
         <p className="small muted" style={{ margin: '4px 0 10px' }}>
-          Events {d.name} attended or was rated at, in sheet order. Events have no dates, so this is not a timeline.
+          Events {d.name} attended or was rated at, in sheet order (not sorted by date; older events may have no date).
         </p>
         {d.perEvent.length === 0 ? <p className="small">Not marked present at any event.</p> : (
           <div className="table-wrap" role="region" aria-label={'Per-event results for ' + d.name} tabIndex={0}>
@@ -121,7 +122,7 @@ export default function AnalyticsTab({ data }) {
               <tbody>
                 {d.perEvent.map(e => (
                   <tr key={e.eventId}>
-                    <th scope="row">{e.name}{e.n > 0 && e.small && <span className="badge">small</span>}</th>
+                    <th scope="row">{e.name}<span className="small muted" style={{ display: 'block', fontWeight: 'normal' }}>{formatEventDate(e.date) || 'Date not set'}</span>{e.n > 0 && e.small && <span className="badge">small</span>}</th>
                     <td>{e.attended ? 'Yes' : 'No'}</td>
                     <td>{e.n}</td>
                     <td>{e.voters}</td>

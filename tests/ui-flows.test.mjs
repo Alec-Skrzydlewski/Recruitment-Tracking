@@ -112,6 +112,8 @@ test('demo: landing → voter persona → vote saves → admin sees it → wipe 
   const select = document.getElementById('vote-event');
   assert.ok(document.querySelector('label[for="vote-event"]'));
   assert.equal(select.value, 'e-pro', 'defaults to the latest event');
+  assert.match(select.querySelector('option[value="e-info"]').textContent, /Info Night — Sep 8, 2026/);
+  assert.equal(select.querySelector('option[value="e-pro"]').textContent, 'Professional Night', 'undated option unchanged');
 
   const radio = document.querySelector('input[aria-label="8 for Avery Quill"]');
   assert.ok(radio, 'rating options are labelled per recruit');
@@ -139,6 +141,18 @@ test('demo: landing → voter persona → vote saves → admin sees it → wipe 
 
   await click(byText('button[role="tab"]', 'Events'));
   assert.equal(document.getElementById('event-name').placeholder, 'e.g. Info Session', 'new-event example');
+  const dateInput = document.getElementById('event-date');
+  assert.equal(dateInput.type, 'date', 'native calendar date picker');
+  assert.match(document.querySelector('label[for="event-date"]').textContent, /Date \(optional\)/);
+  assert.ok(byText('.event-date', 'Date not set'), 'legacy undated event reads safely');
+  assert.ok(byText('.event-date', 'Sep 8, 2026'), 'dated seed event shows its date');
+  await type(document.getElementById('event-name'), 'Leap Mixer');
+  await type(dateInput, '2028-02-29');
+  await click(byText('button', 'Add event'));
+  await until(() => backend.snapshot().events.some(e => e.name === 'Leap Mixer' && !String(e.id).startsWith('tmp')), 'dated event saved');
+  assert.equal(backend.snapshot().events.find(e => e.name === 'Leap Mixer').date, '2028-02-29');
+  await until(() => byText('.event-date', 'Feb 29, 2028'), 'date rendered from parts');
+  assert.equal(dateInput.value, '', 'picker cleared after add');
   const firstEvent = backend.snapshot().events[0];
   const eventVotes = backend.snapshot().votes.filter(v => v.eventId === firstEvent.id).length;
   const prompts = [];

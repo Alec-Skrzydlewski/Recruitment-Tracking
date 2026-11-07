@@ -229,13 +229,13 @@ export default function Admin() {
         end(key)
       }
     },
-    async addEvent(name) {
+    async addEvent(name, date = '') {
       if (!begin('add-event')) return false
       const tempId = nextTempId()
-      const result = apply(dataRef.current, { type: 'addTemp', collection: 'events', tempId, item: { name } })
+      const result = apply(dataRef.current, { type: 'addTemp', collection: 'events', tempId, item: { name, date } })
       commit(result.data)
       try {
-        const res = await api('addEvent', { name, requestId: requestId() })
+        const res = await api('addEvent', date ? { name, date, requestId: requestId() } : { name, requestId: requestId() })
         if (res && res.id && dataRef.current) commit(replaceId(dataRef.current, tempId, res.id))
         return true
       } catch (err) {

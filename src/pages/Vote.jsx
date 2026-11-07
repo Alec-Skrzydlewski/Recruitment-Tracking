@@ -1,3 +1,4 @@
+import { formatEventDate } from '../lib/eventDate'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRuntime } from '../runtime'
 import { usePhotoMap } from '../lib/usePhotoMap'
@@ -101,7 +102,7 @@ export default function Vote() {
           <div className="card">
             <label className="field-label" htmlFor="vote-event">Event</label>
             <select id="vote-event" value={eventId} onChange={e => setEventId(e.target.value)}>
-              {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
+              {events.map(ev => <option key={ev.id} value={ev.id}>{formatEventDate(ev.date) ? ev.name + ' — ' + formatEventDate(ev.date) : ev.name}</option>)}
             </select>
             {recruits.length > 0 && (
               <div style={{ marginTop: 12 }}>

@@ -124,7 +124,7 @@ export function buildAnalytics(data, filters = EMPTY_FILTERS) {
     const perEvent = selectedEvents.map(e => {
       const eid = String(e.id)
       const at = mine.filter(b => b.eid === eid)
-      return { eventId: eid, name: e.name, attended: present.has(key(eid, id)), voters: new Set(at.map(b => b.voter)).size, ...summarize(at.map(b => b.score)) }
+      return { eventId: eid, name: e.name, date: e.date || '', attended: present.has(key(eid, id)), voters: new Set(at.map(b => b.voter)).size, ...summarize(at.map(b => b.score)) }
     })
     const rated = perEvent.filter(p => p.n > 0)
     return {
@@ -152,6 +152,7 @@ export function buildAnalytics(data, filters = EMPTY_FILTERS) {
     return {
       eventId: eid,
       name: e.name,
+      date: e.date || '',
       attendees: attendees.length,
       ratedRecruits: new Set(mine.map(b => b.rid)).size,
       voters: new Set(mine.map(b => b.voter)).size,

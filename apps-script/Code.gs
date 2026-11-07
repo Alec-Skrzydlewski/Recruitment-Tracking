@@ -25,6 +25,10 @@ const SCHEMA = {
   Votes: ['eventId', 'recruitId', 'userEmail', 'score', 'timestamp'],
   Notes: ['recruitId', 'content', 'updatedAt'],
 };
+// Optional columns: read when the header has them, never required, never
+// added by setup or by a read. Events.date (YYYY-MM-DD) is added to the
+// header only when an admin saves the first dated event (under the lock).
+const OPTIONAL = { Events: ['date'] };
 const ROLES = ['admin', 'brother'];
 const LIMITS = { name: 120, major: 120, note: 5000, email: 254, id: 64 };
 
@@ -264,7 +268,66 @@ function readTable(ss, name) {
     if (header.indexOf(key, first + 1) !== -1) throw appError('SCHEMA', 'The "' + name + '" sheet has a duplicate "' + key + '" column.');
     col[key] = first;
   });
-  return { name: name, sheet: sheet, values: values, header: header, col: col };
+  (OPTIONAL[name] || []).forEach(key => {
+    const first = header.indexOf(key);
+    if (first === -1) return;
+    if (header.indexOf(key, first + 1) !== -1) throw appError('SCHEMA', 'The "' + name + '" sheet has a duplicate "' + key + '" column.');
+    col[key] = first;
+  });
+  return { name: name, sheet: sheet, values: values, header: header, col: col, ss: ss };
+}
+
+function columnsOf(name) {
+  return SCHEMA[name].concat(OPTIONAL[name] || []);
+}
+
+// ---------- event dates (date-only, YYYY-MM-DD) ----------
+
+function isRealDate(y, m, d) {
+  if (m < 1 || m > 12 || d < 1) return false;
+  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1];
+  return d <= days;
+}
+
+// Request payload: absent, null or '' means no date. Otherwise a string
+// exactly YYYY-MM-DD for a real calendar day, year 2000-2100. No coercion.
+function validEventDate(value) {
+  if (value === undefined || value === null || value === '') return '';
+  if (typeof value !== 'string') throw appError('INVALID', 'Event date must be a date like 2026-09-15.');
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!m) throw appError('INVALID', 'Event date must be a date like 2026-09-15.');
+  const y = Number(m[1]);
+  if (y < 2000 || y > 2100 || !isRealDate(y, Number(m[2]), Number(m[3]))) throw appError('INVALID', 'Event date is not a real calendar date.');
+  return value;
+}
+
+// Stored cell -> 'YYYY-MM-DD' or '' (not recorded). Text is accepted only in
+// the exact form. A Date cell (e.g. typed in the Sheet by hand) is read in
+// the spreadsheet's own time zone so it never shifts a day. Anything else
+// reads as not recorded; nothing is guessed or written back.
+function readEventDate(value, ss) {
+  if (value === null || value === undefined || value === '') return '';
+  if (Object.prototype.toString.call(value) === '[object Date]' || (value && typeof value.getTime === 'function' && typeof value !== 'string')) {
+    if (isNaN(value.getTime())) return '';
+    const tz = ss && typeof ss.getSpreadsheetTimeZone === 'function' ? ss.getSpreadsheetTimeZone() : 'UTC';
+    const text = Utilities.formatDate(value, tz, 'yyyy-MM-dd');
+    try { return validEventDate(text); } catch (err) { return ''; }
+  }
+  try { return validEventDate(String(value).trim()); } catch (err) { return ''; }
+}
+
+// Adds the optional column header once, after the last non-blank header
+// cell, without touching any row. Only called under the admin lock.
+function ensureOptionalColumn(table, key) {
+  if (table.col[key] !== undefined) return;
+  let width = table.header.length;
+  while (width > 0 && table.header[width - 1] === '') width -= 1;
+  table.sheet.getRange(1, width + 1).setValue(key);
+  table.header[width] = key;
+  if (!table.values[0]) table.values[0] = [];
+  table.values[0][width] = key;
+  table.col[key] = width;
 }
 
 function rowObject(table, r) {
@@ -273,6 +336,10 @@ function rowObject(table, r) {
   SCHEMA[table.name].forEach(key => {
     const v = row[table.col[key]];
     obj[key] = v === undefined ? '' : v;
+  });
+  (OPTIONAL[table.name] || []).forEach(key => {
+    const v = table.col[key] === undefined ? '' : row[table.col[key]];
+    obj[key] = key === 'date' ? readEventDate(v, table.ss) : (v === undefined ? '' : v);
   });
   return obj;
 }
@@ -300,7 +367,7 @@ function appendObject(table, obj) {
   const row = [];
   for (let c = 0; c < width; c++) {
     const key = table.header[c];
-    row.push(Object.prototype.hasOwnProperty.call(obj, key) && SCHEMA[table.name].indexOf(key) !== -1 ? safeCell(obj[key]) : '');
+    row.push(Object.prototype.hasOwnProperty.call(obj, key) && columnsOf(table.name).indexOf(key) !== -1 ? safeCell(obj[key]) : '');
   }
   table.sheet.appendRow(row);
   table.values.push(row.map(v => (typeof v === 'string' && v.charAt(0) === "'" ? v.slice(1) : v)));
@@ -688,12 +755,20 @@ function deleteEvent(ss, user, body) {
 
 function addEvent(ss, user, body) {
   const name = requireText(body && body.name, LIMITS.name, 'Event name', true);
+  const date = validEventDate(body && body.date);
   const key = requestCacheKey('addEvent', user, body && body.requestId);
   return withAdminLock(ss, user, () => idempotentLocked(key, () => {
     const table = readTable(ss, 'Events');
     const id = Utilities.getUuid();
-    appendObject(table, { id: id, name: name });
-    return { id: id };
+    const row = { id: id, name: name };
+    if (date) {
+      ensureOptionalColumn(table, 'date');
+      // Leading apostrophe stores literal text so Sheets never converts it
+      // to a Date (which could shift by time zone).
+      row.date = "'" + date;
+    }
+    appendObject(table, row);
+    return date ? { id: id, date: date } : { id: id };
   }));
 }
 
@@ -814,7 +889,7 @@ function canonicalCell(value) {
 // changes it, including a re-scored vote, an edited note, or a delete plus an
 // add that leaves row counts unchanged.
 function cycleFingerprint(tables) {
-  const canonical = tables.map(t => [t.name, tableRows(t).map(row => SCHEMA[t.name].map(k => canonicalCell(row[k])))]);
+  const canonical = tables.map(t => [t.name, tableRows(t).map(row => columnsOf(t.name).map(k => canonicalCell(row[k])))]);
   const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, JSON.stringify(canonical), Utilities.Charset.UTF_8);
   return bytes.map(b => ((b + 256) % 256).toString(16).padStart(2, '0')).join('');
 }

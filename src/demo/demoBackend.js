@@ -1,3 +1,4 @@
+import { isValidEventDate } from '../lib/eventDate.js'
 // In-memory backend for the public demo. It implements the same actions and
 // the same authorization/validation rules as apps-script/Code.gs, against
 // fictional seed data, with no network access of any kind.
@@ -174,10 +175,13 @@ export function createDemoBackend({ latencyMs = 120, seed = demoSeed } = {}) {
     addEvent(email, body) {
       requireAdmin(email);
       const name = text(body.name, 120, 'Event name', true);
+      const raw = body.date;
+      const date = raw === undefined || raw === null || raw === '' ? '' : raw;
+      if (date !== '' && !isValidEventDate(date)) throw fail('Event date must be a real calendar date like 2026-09-15.', 'INVALID');
       return once(body.requestId, () => {
         const eid = newId('e');
-        db.events.push({ id: eid, name });
-        return { id: eid };
+        db.events.push({ id: eid, name, date });
+        return date ? { id: eid, date } : { id: eid };
       });
     },
     deleteEvent(email, body) {
