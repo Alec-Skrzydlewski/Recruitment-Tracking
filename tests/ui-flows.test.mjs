@@ -237,52 +237,71 @@ async function go(url) {
   });
 }
 
-test('analytics: admin-only linkable tab with ranks, ties, detail, filters and reset', async () => {
+test('analytics: one recruit dropdown, individual results, switching changes every detail', async () => {
   const backend = ui.createDemoBackend({ latencyMs: 0 });
   const root = mount(createElement(ui.DemoApp, { backend }));
   await until(() => byText('button.persona', 'Jordan Vale'), 'landing');
   await click(byText('button.persona', 'Jordan Vale'));
   await until(() => byText('button[role="tab"]', 'Analytics'), 'admin tabs');
   await click(byText('button[role="tab"]', 'Analytics'));
-  await until(() => byText('h2', 'Recruit comparison'), 'analytics');
+  const select = await until(() => document.getElementById('an-recruit'), 'recruit select');
   assert.equal(new URLSearchParams(window.location.search).get('tab'), 'analytics', 'tab is linkable');
-  assert.equal(byText('button[role="tab"]', 'Analytics').getAttribute('aria-selected'), 'true');
 
-  const table = document.querySelector('[aria-label="Recruit comparison table"] table');
-  const bodyRows = [...table.querySelectorAll('tbody tr')];
-  assert.equal(bodyRows.length, 6);
-  assert.match(bodyRows[0].textContent, /^1Avery Quill/);
-  const tied = bodyRows.filter(r => r.textContent.includes('tied'));
-  assert.equal(tied.length, 2, 'Casey and Emerson share rank 2');
-  assert.ok(tied.every(r => r.textContent.startsWith('2tied')));
+  // Exactly one control: the recruit dropdown. No cohort tables or filters.
+  const panel = document.querySelector('.analytics');
+  assert.equal(panel.querySelectorAll('select').length, 1);
+  assert.equal(panel.querySelectorAll('input').length, 0);
+  for (const gone of ['Recruit comparison', 'Event comparison', 'Voter participation', 'Reset filters', 'Completion', 'Rank']) {
+    assert.equal(panel.textContent.includes(gone), false, gone);
+  }
   assert.equal(/exclud/i.test(document.body.textContent), false);
-  assert.ok(byText('summary', 'Methodology'));
-  assert.ok(byText('p', 'not a timeline'));
-  assert.ok(document.querySelector('figure.hist table'), 'chart has a data table fallback');
 
-  // Sorting by name toggles aria-sort.
-  const nameHeader = [...table.querySelectorAll('th')].find(th => th.textContent === 'Recruit');
-  await click(nameHeader.querySelector('button'));
-  assert.equal(nameHeader.getAttribute('aria-sort'), 'ascending');
+  const labels = [...select.options].map(o => o.textContent);
+  assert.deepEqual(labels, [...labels].sort((x, y) => x.localeCompare(y)), 'alphabetical');
+  assert.equal(labels.length, 6);
+  assert.equal(select.value, 'r-avery', 'defaults to the first recruit, never empty');
+  assert.equal(document.getElementById('an-detail').textContent, 'Avery Quill');
 
-  // Recruit detail.
-  await click(document.querySelector('button[aria-label="Show details for Finley Moss"]'));
-  await until(() => byText('h2', 'Recruit detail: Finley Moss'), 'detail');
-  const perEvent = document.querySelector('[aria-label="Per-event results for Finley Moss"] table');
-  assert.ok(perEvent.textContent.includes('Professional Night'));
+  const snapshot = () => ({
+    stats: [...panel.querySelectorAll('.stat')].map(s => s.textContent).join('|'),
+    events: document.querySelector('[aria-label^="Per-event results"] tbody').textContent,
+    hist: document.querySelector('figure.hist table').textContent,
+    meta: panel.querySelector('#an-detail + p, .row + p').textContent,
+  });
+  const avery = snapshot();
+  assert.match(avery.stats, /8\.22.*Mean/);
+  await choose(select, 'r-finley');
+  await until(() => document.getElementById('an-detail').textContent === 'Finley Moss', 'switched');
+  const finley = snapshot();
+  for (const k of Object.keys(avery)) assert.notEqual(finley[k], avery[k], k + ' changed');
+  assert.equal(panel.textContent.includes('Avery Quill'), true, 'only as a dropdown option');
+  assert.equal(document.querySelector('[aria-label^="Per-event results"]').textContent.includes('Avery'), false);
+  assert.ok(byText('button', 'Export Finley Moss’s results (CSV)'));
+  assert.ok(byText('summary', 'How these numbers are calculated'));
 
-  // Event filter narrows ballots; reset restores the whole pool.
-  const status = () => document.querySelector('.analytics [role="status"]').textContent;
-  assert.match(status(), /Showing 6 of 6 recruits across 3 events · 39 valid ballots\. No filters/);
-  const info = [...document.querySelectorAll('.chips label')].find(l => l.textContent === 'Info Night');
-  await click(info.querySelector('input'));
-  assert.match(status(), /across 1 event · 17 valid ballots\. Filters are on/);
-  await type(document.getElementById('an-search'), 'blake');
-  assert.match(status(), /Showing 1 of 6 recruits/);
-  await click(byText('button', 'Reset filters'));
-  assert.match(status(), /Showing 6 of 6 recruits across 3 events/);
-  assert.equal(document.getElementById('an-search').value, '');
+  // Deleting the selected recruit falls back to the first remaining recruit.
+  await click(byText('button[role="tab"]', 'Recruits'));
+  window.confirm = globalThis.confirm = () => true;
+  await click(document.querySelector('button[aria-label="Remove Finley Moss"]'));
+  await until(() => !backend.snapshot().recruits.some(r => r.id === 'r-finley'), 'deleted');
+  await click(byText('button[role="tab"]', 'Analytics'));
+  await until(() => document.getElementById('an-recruit') && document.getElementById('an-recruit').value === 'r-avery', 'fallback');
+  act(() => root.unmount());
+  assert.deepEqual(network, []);
+});
 
+test('analytics: with no recruits it explains instead of showing an empty select', async () => {
+  const backend = ui.createDemoBackend({ latencyMs: 0 });
+  const empty = { ...backend, call(email, action, extra) {
+    return backend.call(email, action, extra).then(r => (action === 'getAdminData' ? { ...r, recruits: [], attendance: [], votes: [], notes: [] } : r));
+  } };
+  const root = mount(createElement(ui.DemoApp, { backend: empty }));
+  await until(() => byText('button.persona', 'Jordan Vale'), 'landing');
+  await click(byText('button.persona', 'Jordan Vale'));
+  await until(() => byText('button[role="tab"]', 'Analytics'), 'admin tabs');
+  await click(byText('button[role="tab"]', 'Analytics'));
+  await until(() => byText('p', 'No recruits yet'), 'empty state');
+  assert.equal(document.getElementById('an-recruit'), null);
   act(() => root.unmount());
   assert.deepEqual(network, []);
 });
