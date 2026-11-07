@@ -7,17 +7,16 @@ export const DEMO_PERSONAS = [
     email: 'jordan.admin@example.test',
     name: 'Jordan Vale',
     role: 'admin',
-    label: 'Recruitment chair',
-    blurb: 'Manage recruits, events, attendance, members and the live tally.',
   },
   {
     email: 'riley.member@example.test',
     name: 'Riley Brooks',
     role: 'brother',
-    label: 'Voting member',
-    blurb: 'Pick an event and rate the recruits who attended it.',
   },
 ];
+
+// Fixed identity the showcase opens as (admin, so Admin and Vote are both reachable).
+export const DEMO_USER = DEMO_PERSONAS[0];
 
 export function demoSeed() {
   const recruits = JAGUARS_RECRUITS.map(r => ({ ...r,

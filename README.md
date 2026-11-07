@@ -19,7 +19,7 @@ averages. The backend is a Google Sheet plus a Google Apps Script web app, so a
 volunteer officer can operate it without servers, databases or a budget.
 
 > **Try the demo:** `npm ci && npm run dev:demo`, then open the printed
-> localhost URL and choose a persona. The demo runs entirely in your browser on
+> localhost URL; it opens straight on the admin dashboard. The demo runs entirely in your browser on
 > fictional data. It needs no sign-in, backend, or network.
 
 <!-- OWNER: add a sentence on your role/motivation and a hosted demo link here once published. -->
@@ -251,13 +251,11 @@ npm test              # all unit, backend, security and UI-flow tests
 npm run ci            # lint + tests + live build + demo build + bundle isolation check
 ```
 
-**Demo personas:**
+**Demo identity:** the showcase opens directly on the real admin dashboard as a
+fixed fictional admin (Jordan Vale), with **Admin** and **Vote** in the header.
+There is no persona chooser or landing page.
 
-- **Jordan Vale** (admin): dashboard, recruits, events and attendance,
-  members, settings and wipe.
-- **Riley Brooks** (member): voting.
-
-Use **Reset demo data** in the purple ribbon to return to the seed. Data
+Use **Reset** in the compact demo ribbon to return to the seed. Data
 lives only in the current tab.
 
 Live mode locally: copy `.env.example` to `.env.local`, fill both values, then run `npm run dev`.
@@ -347,7 +345,7 @@ frontend, so deploy and verify the backend (step 1) before merging.
 | `analytics.test.mjs` | Exact analytics values: mean/median/SD/histogram, unequal event counts, equal-event vs all-ballot mean, duplicates, inactive-voter retention, invalid rows, empty cases; recruit dropdown order/labels/duplicates, default and removed-selection fallback; two recruits differ in every detail and in export scope; CSV CR/quote round-trip and formula guards |
 | `code-gs.test.mjs` | Parity with the original behavior: vote upsert and dedupe, required graduation year (no write, no Drive upload) and legacy rows without one, user management guards, schema setup, photo upload, sync, link and folder rules |
 | `responsive-css.test.mjs` | Phone layout guards (360–390px): file pickers cannot widen the page, header wraps into rows with one-line Sign out, admin tabs wrap, voting scale stays 2x5 |
-| `ui-flows.test.mjs` | Real React pages in jsdom against the demo backend: persona flow, vote save, rollback and retry, note-failure draft retention, wipe guard, reset; Analytics tab (URL tab, single recruit dropdown, switching recruits, no cohort sections, deleted-selection fallback, no-recruit state, admin-only redirect, read failure); required graduation year in the add form. `fetch`, XHR, WebSocket, beacons and script injection are tripwires, and the tests assert zero network use. The unconfigured live app fails closed. |
+| `ui-flows.test.mjs` | Real React pages in jsdom against the demo backend: direct-to-dashboard start (no landing/persona chooser), voter flow, vote save, rollback and retry, note-failure draft retention, wipe guard, reset; Analytics tab (URL tab, single recruit dropdown, switching recruits, no cohort sections, deleted-selection fallback, no-recruit state, admin-only redirect, read failure); required graduation year in the add form. `fetch`, XHR, WebSocket, beacons and script injection are tripwires, and the tests assert zero network use. The unconfigured live app fails closed. |
 | `frontend-libs`, `demo-backend`, `api`, `headers`, … | Tally rules, the write queue, the photo cache, transport errors and timeouts, demo-rule parity, and the CSP |
 
 The suites use a synthetic in-memory Sheets, Drive, Lock and Cache
