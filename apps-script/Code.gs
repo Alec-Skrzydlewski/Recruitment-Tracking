@@ -1108,12 +1108,40 @@ function textField(value) {
 }
 
 // Drive access is wrapped so a missing grant or folder becomes one stable,
-// photo-scoped error instead of a raw Google exception.
-function driveCall(fn) {
+// photo-scoped error instead of a raw Google exception. The failing step and a
+// bounded category are written to the server log (Executions) for the owner;
+// the raw message, IDs, names, emails and stacks are never logged or returned.
+const DRIVE_OPS = ['openCachedFolder', 'openSheetFile', 'listSheetParents', 'findPhotoFolder',
+  'createPhotoFolder', 'cacheFolderId', 'listPhotoFiles', 'createPhotoFile'];
+const DRIVE_ERROR_CATEGORIES = [
+  ['SCOPE_NOT_GRANTED', /you do not have permission to call|required permissions|authorization is required/i],
+  ['ACCESS_DENIED', /access denied|forbidden|insufficient permission|do not have permission|not have access/i],
+  ['NOT_FOUND', /not found|no item with the given id|does not exist|is trashed/i],
+  ['QUOTA', /quota|rate limit|too many|limit exceeded|invoked too many times/i],
+  ['TIMEOUT', /timed? ?out|deadline/i],
+  ['SERVICE_ERROR', /server error|service error|backend error|temporarily unavailable|internal error|service unavailable/i],
+];
+
+function classifyDriveError(err) {
+  let message = '';
+  try { message = String(err && err.message !== undefined ? err.message : err); } catch (e) { message = ''; }
+  for (let i = 0; i < DRIVE_ERROR_CATEGORIES.length; i++) {
+    if (DRIVE_ERROR_CATEGORIES[i][1].test(message)) return DRIVE_ERROR_CATEGORIES[i][0];
+  }
+  return 'OTHER';
+}
+
+function logDriveFailure(op, err) {
+  const label = DRIVE_OPS.indexOf(op) === -1 ? 'unknown' : op;
+  try { console.warn('PHOTO_DRIVE_FAILURE op=' + label + ' category=' + classifyDriveError(err)); } catch (e) { /* ignore */ }
+}
+
+function driveCall(op, fn) {
   try {
     return fn();
   } catch (err) {
     if (err && err.publicCode) throw err;
+    logDriveFailure(op, err);
     throw appError('PHOTO_UNAVAILABLE', PHOTO_UNAVAILABLE);
   }
 }
@@ -1125,29 +1153,27 @@ function getPhotoFolder(ss, create) {
   const cached = props.getProperty(PHOTO_FOLDER_PROP);
   if (cached) {
     let existing = null;
-    try { existing = DriveApp.getFolderById(cached); } catch (err) { existing = null; }
+    try { existing = DriveApp.getFolderById(cached); } catch (err) { existing = null; logDriveFailure('openCachedFolder', err); }
     if (existing && existing.getName() === PHOTO_FOLDER_NAME) return existing;
   }
-  return driveCall(() => {
-    const file = DriveApp.getFileById(ss.getId());
+  const file = driveCall('openSheetFile', () => DriveApp.getFileById(ss.getId()));
+  const parent = driveCall('listSheetParents', () => {
     const parents = file.getParents();
-    if (!parents.hasNext()) throw appError('PHOTO_UNAVAILABLE', 'The spreadsheet has no parent folder for photos.');
-    const parent = parents.next();
-    const found = parent.getFoldersByName(PHOTO_FOLDER_NAME);
-    if (found.hasNext()) {
-      const folder = found.next();
-      props.setProperty(PHOTO_FOLDER_PROP, folder.getId());
-      return folder;
-    }
-    if (!create) return null;
-    const folder = parent.createFolder(PHOTO_FOLDER_NAME);
-    props.setProperty(PHOTO_FOLDER_PROP, folder.getId());
-    return folder;
+    return parents.hasNext() ? parents.next() : null;
   });
+  if (!parent) throw appError('PHOTO_UNAVAILABLE', 'The spreadsheet has no parent folder for photos.');
+  const found = driveCall('findPhotoFolder', () => {
+    const it = parent.getFoldersByName(PHOTO_FOLDER_NAME);
+    return it.hasNext() ? it.next() : null;
+  });
+  if (!found && !create) return null;
+  const folder = found || driveCall('createPhotoFolder', () => parent.createFolder(PHOTO_FOLDER_NAME));
+  driveCall('cacheFolderId', () => props.setProperty(PHOTO_FOLDER_PROP, folder.getId()));
+  return folder;
 }
 
 function listImageFiles(folder) {
-  return driveCall(() => {
+  return driveCall('listPhotoFiles', () => {
     const files = [];
     const iterator = folder.getFiles();
     while (iterator.hasNext()) {
@@ -1174,7 +1200,7 @@ function decodePhoto(dataBase64) {
 function savePhotoFile(ss, recruitName, bytes) {
   const folder = getPhotoFolder(ss, true);
   const safe = textField(recruitName).replace(/[\\/]/g, ' ').replace(/\s+/g, ' ').trim() || 'Recruit';
-  return driveCall(() => {
+  return driveCall('createPhotoFile', () => {
     const blob = Utilities.newBlob(bytes, 'image/jpeg', safe + '.jpg');
     return folder.createFile(blob).getId();
   });
@@ -1335,6 +1361,7 @@ if (typeof module !== 'undefined') {
     wipeCycle: wipeCycle,
     uploadPhoto: uploadPhoto,
     getPhotos: getPhotos,
+    classifyDriveError: classifyDriveError,
     syncPhotoFolder: syncPhotoFolder,
     linkPhoto: linkPhoto,
     normalizeName: normalizeName,
