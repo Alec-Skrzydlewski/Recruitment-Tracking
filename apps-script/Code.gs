@@ -1,56 +1,117 @@
-// Recruitment Tracker — Google Apps Script Backend
-// Deploy as Web App from the sheet (Extensions → Apps Script): Execute as Me, Who has access: Anyone
-// SHEET_ID is read inside doPost so this file can load in tests without SpreadsheetApp.
+// Recruitment Tracker — Google Apps Script backend.
+//
+// Deploy from the bound Sheet (Extensions → Apps Script) as a Web app:
+// Execute as: Me · Who has access: Anyone. "Anyone" only means the endpoint is
+// reachable; every action below still requires a Google ID token that was
+// issued to THIS app's OAuth client (aud check) for an active Users row.
+//
+// Required Script Properties (Project Settings → Script properties):
+//   GOOGLE_CLIENT_ID  OAuth web client ID the frontend signs in with (expected aud)
+//   OWNER_EMAIL       Google account allowed to initialize the schema and become
+//                     the first admin. Nobody else can claim an empty deployment.
+// The backend fails closed when either is missing. See README "Backend setup".
+
+const API_VERSION = 2;
+const SCHEMA_VERSION = 2;
+const LOCK_WAIT_MS = 10000;
+const GOOGLE_ISSUERS = ['accounts.google.com', 'https://accounts.google.com'];
+const MAX_TOKEN_LENGTH = 4096;
+
+const SCHEMA = {
+  Users: ['email', 'name', 'role', 'active'],
+  Recruits: ['id', 'name', 'major', 'secondMajor', 'gradYear', 'photoFileId', 'photoSource'],
+  Events: ['id', 'name'],
+  EventRecruits: ['eventId', 'recruitId'],
+  Votes: ['eventId', 'recruitId', 'userEmail', 'score', 'timestamp'],
+  Notes: ['recruitId', 'content', 'updatedAt'],
+};
+const RECRUIT_COLUMNS = SCHEMA.Recruits;
+const ROLES = ['admin', 'brother'];
+const LIMITS = { name: 120, major: 120, note: 5000, email: 254, id: 64 };
+
+// ---------- errors ----------
+
+// Errors with a public message and stable code. Anything else is reported as
+// a generic server error so stack details and Google service text never reach
+// the browser.
+function appError(code, message) {
+  const err = new Error(message);
+  err.publicCode = code;
+  return err;
+}
+
+function errorResult(code, message) {
+  return { error: message, code: code };
+}
+
+// ---------- entry point ----------
+
+const MEMBER_ACTIONS = {
+  getMe: true, getVoteData: true, castVote: true, getPhotos: true,
+};
+const ADMIN_ACTIONS = {
+  getAdminData: true, addRecruit: true, deleteRecruit: true, uploadPhoto: true,
+  syncPhotoFolder: true, linkPhoto: true, addEvent: true, deleteEvent: true,
+  setAttendance: true, saveNote: true, manageUser: true, wipeCycle: true,
+};
 
 function doPost(e) {
   try {
-    const body = JSON.parse(e.postData.contents);
-    const action = body.action;
-    const token = body.token;
-    const user = verifyToken(token);
-    if (!user) return json({ error: 'Invalid or expired login' });
-
-    const SHEET_ID = SpreadsheetApp.getActiveSpreadsheet().getId();
-    const ss = SpreadsheetApp.openById(SHEET_ID);
-    ensureSheets(ss);
-
-    let result;
-    switch (action) {
-      case 'bootstrap': result = bootstrap(ss, user); break;
-      case 'getMe': result = getMe(ss, user); break;
-      case 'getVoteData': result = getVoteData(ss, user); break;
-      case 'castVote': result = castVote(ss, user, body); break;
-      case 'getAdminData': result = requireAdmin(ss, user) && getAdminData(ss); break;
-      case 'addRecruit': result = requireAdmin(ss, user) && addRecruit(ss, body); break;
-      case 'deleteRecruit': result = requireAdmin(ss, user) && deleteRecruit(ss, body); break;
-      case 'uploadPhoto': result = requireAdmin(ss, user) && uploadPhoto(ss, body); break;
-      case 'getPhotos': result = getPhotos(ss, user, body); break;
-      case 'syncPhotoFolder': result = requireAdmin(ss, user) && syncPhotoFolder(ss); break;
-      case 'linkPhoto': result = requireAdmin(ss, user) && linkPhoto(ss, body); break;
-      case 'addEvent': result = requireAdmin(ss, user) && addEvent(ss, body); break;
-      case 'deleteEvent': result = requireAdmin(ss, user) && deleteEvent(ss, body); break;
-      case 'toggleAttendance': result = requireAdmin(ss, user) && toggleAttendance(ss, body); break;
-      case 'saveNote': result = requireAdmin(ss, user) && saveNote(ss, body); break;
-      case 'manageUser': result = requireAdmin(ss, user) && manageUser(ss, user, body); break;
-      case 'wipeCycle': result = requireAdmin(ss, user) && wipeCycle(ss); break;
-      default: result = { error: 'Unknown action' };
+    let body;
+    try {
+      body = JSON.parse(e && e.postData ? e.postData.contents : '');
+    } catch (parseErr) {
+      return json(errorResult('BAD_REQUEST', 'Malformed request'));
     }
-    return json(result || { ok: true });
+    if (!body || typeof body !== 'object') return json(errorResult('BAD_REQUEST', 'Malformed request'));
+    if (body.apiVersion !== API_VERSION) {
+      return json(errorResult('VERSION', 'This page is out of date. Refresh to load the current version.'));
+    }
+    const config = readConfig();
+    const user = verifyToken(body.token, config.clientId);
+    if (!user) return json(errorResult('AUTH', 'Invalid or expired login'));
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    return json(dispatch(ss, user, config, String(body.action || ''), body) || { ok: true });
   } catch (err) {
-    return json({ error: err.message });
+    if (err && err.publicCode) return json(errorResult(err.publicCode, err.message));
+    try { console.error(err && err.stack ? err.stack : err); } catch (logErr) { /* ignore */ }
+    return json(errorResult('INTERNAL', 'Something went wrong on the server. Try again.'));
   }
 }
 
-function verifyToken(token) {
-  if (!token) return null;
-  try {
-    const res = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(token));
-    const data = JSON.parse(res.getContentText());
-    if (data.email && data.email_verified === 'true') {
-      return { email: String(data.email).toLowerCase(), name: data.name || data.email };
+function dispatch(ss, user, config, action, body) {
+  if (action === 'bootstrap') return bootstrap(ss, user, config);
+  if (action === 'setupSchema') {
+    requireOwner(user, config);
+    return setupSchema(ss);
+  }
+  if (MEMBER_ACTIONS[action]) {
+    const me = requireMember(ss, user);
+    switch (action) {
+      case 'getMe': return me;
+      case 'getVoteData': return getVoteData(ss, me);
+      case 'castVote': return castVote(ss, user, body);
+      case 'getPhotos': return getPhotos(ss, me, body);
     }
-  } catch (e) {}
-  return null;
+  }
+  if (ADMIN_ACTIONS[action]) {
+    requireAdmin(ss, user);
+    switch (action) {
+      case 'getAdminData': return getAdminData(ss);
+      case 'addRecruit': return addRecruit(ss, body);
+      case 'deleteRecruit': return deleteRecruit(ss, body);
+      case 'uploadPhoto': return uploadPhoto(ss, body);
+      case 'syncPhotoFolder': return syncPhotoFolder(ss);
+      case 'linkPhoto': return linkPhoto(ss, body);
+      case 'addEvent': return addEvent(ss, body);
+      case 'deleteEvent': return deleteEvent(ss, body);
+      case 'setAttendance': return setAttendance(ss, body);
+      case 'saveNote': return saveNote(ss, body);
+      case 'manageUser': return manageUser(ss, user, body);
+      case 'wipeCycle': return wipeCycle(ss, body);
+    }
+  }
+  return errorResult('UNKNOWN_ACTION', 'Unknown action');
 }
 
 function json(obj) {
@@ -58,105 +119,123 @@ function json(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function withLock(fn) {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+// ---------- configuration and identity ----------
+
+function readConfig() {
+  const props = PropertiesService.getScriptProperties();
+  const clientId = String(props.getProperty('GOOGLE_CLIENT_ID') || '').trim();
+  const ownerEmail = String(props.getProperty('OWNER_EMAIL') || '').trim().toLowerCase();
+  if (!clientId) throw appError('NOT_CONFIGURED', 'The server is not configured yet (GOOGLE_CLIENT_ID).');
+  return { clientId: clientId, ownerEmail: ownerEmail };
+}
+
+// Google's tokeninfo endpoint verifies the signature and expiry. We then bind
+// the token to this app (aud), require a Google issuer, a verified email and
+// an unexpired exp. A valid Google token minted for another app is rejected.
+function verifyToken(token, expectedAud, nowMs) {
+  if (!token || typeof token !== 'string' || token.length > MAX_TOKEN_LENGTH) return null;
+  if (!expectedAud) return null;
+  let res;
   try {
-    return fn();
-  } finally {
-    lock.releaseLock();
+    res = UrlFetchApp.fetch(
+      'https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(token),
+      { muteHttpExceptions: true }
+    );
+  } catch (err) {
+    throw appError('AUTH_UNAVAILABLE', 'Sign-in could not be verified right now. Try again.');
   }
+  const status = typeof res.getResponseCode === 'function' ? res.getResponseCode() : 200;
+  if (status >= 500) throw appError('AUTH_UNAVAILABLE', 'Sign-in could not be verified right now. Try again.');
+  if (status !== 200) return null;
+  let data;
+  try {
+    data = JSON.parse(res.getContentText());
+  } catch (err) {
+    return null;
+  }
+  if (!data || typeof data !== 'object') return null;
+  if (String(data.aud || '') !== String(expectedAud)) return null;
+  if (GOOGLE_ISSUERS.indexOf(String(data.iss || '')) === -1) return null;
+  if (!(data.email_verified === 'true' || data.email_verified === true)) return null;
+  const exp = Number(data.exp);
+  const now = nowMs == null ? Date.now() : nowMs;
+  if (!Number.isFinite(exp) || exp * 1000 <= now) return null;
+  const email = normalizeEmail(data.email);
+  if (!email) return null;
+  return { email: email, name: cleanText(data.name, LIMITS.name) || email };
 }
 
-const RECRUIT_COLUMNS = ['id', 'name', 'major', 'secondMajor', 'gradYear', 'photoFileId', 'photoSource'];
-
-function ensureSheets(ss) {
-  const needed = {
-    Users: ['email', 'name', 'role', 'active'],
-    Events: ['id', 'name'],
-    EventRecruits: ['eventId', 'recruitId'],
-    Votes: ['eventId', 'recruitId', 'userEmail', 'score', 'timestamp'],
-    Notes: ['recruitId', 'content', 'updatedAt']
-  };
-  ensureRecruitColumns(ss);
-  Object.keys(needed).forEach(name => {
-    let sheet = ss.getSheetByName(name);
-    if (!sheet) {
-      sheet = ss.insertSheet(name);
-      sheet.appendRow(needed[name]);
-      return;
-    }
-    // Append missing header cells. Never reorder or delete existing columns.
-    appendMissingHeaders(sheet, needed[name]);
-  });
+function requireOwner(user, config) {
+  if (!config.ownerEmail) throw appError('NOT_CONFIGURED', 'The server is not configured yet (OWNER_EMAIL).');
+  if (user.email !== config.ownerEmail) throw appError('FORBIDDEN', 'Only the configured owner can do that.');
 }
 
-function meaningfulHeader(header) {
-  const copy = header.slice();
-  while (copy.length && copy[copy.length - 1] === '') copy.pop();
-  return copy;
+function requireMember(ss, user) {
+  const me = getMe(ss, user);
+  if (me.error) throw appError('FORBIDDEN', 'Not authorized');
+  return me;
 }
 
-function sameHeader(header, columns) {
-  const got = meaningfulHeader(header);
-  if (got.length !== columns.length) return false;
-  for (let i = 0; i < columns.length; i++) {
-    if (got[i] !== columns[i]) return false;
-  }
-  return true;
+function requireAdmin(ss, user) {
+  const me = getMe(ss, user);
+  if (me.error || me.role !== 'admin') throw appError('FORBIDDEN', 'Admin only');
+  return me;
 }
 
-// Empty recruit sheets (the tracker is wiped) get the current columns.
-// A sheet that still has recruit rows is left alone.
-function ensureRecruitColumns(ss) {
-  let sheet = ss.getSheetByName('Recruits');
-  if (!sheet) {
-    sheet = ss.insertSheet('Recruits');
-    sheet.appendRow(RECRUIT_COLUMNS);
-    return;
-  }
-  if (sheet.getLastRow() < 1) {
-    sheet.appendRow(RECRUIT_COLUMNS);
-    return;
-  }
-  const values = sheet.getDataRange().getValues();
-  const header = values[0].map(cell => String(cell == null ? '' : cell).trim());
-  if (sameHeader(header, RECRUIT_COLUMNS)) return;
-  for (let r = 1; r < values.length; r++) {
-    for (let c = 0; c < values[r].length; c++) {
-      if (cellNonEmpty(values[r][c])) return;
-    }
-  }
-  const width = Math.max(sheet.getLastColumn(), RECRUIT_COLUMNS.length);
-  for (let i = 0; i < RECRUIT_COLUMNS.length; i++) {
-    sheet.getRange(1, i + 1).setValue(RECRUIT_COLUMNS[i]);
-  }
-  if (width > RECRUIT_COLUMNS.length) {
-    sheet.getRange(1, RECRUIT_COLUMNS.length + 1, 1, width - RECRUIT_COLUMNS.length).clearContent();
-  }
+// ---------- validation and safe writes ----------
+
+function cleanText(value, max) {
+  if (value === null || value === undefined) return '';
+  // Drop control characters except newline/tab, then trim.
+  const text = String(value).replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, '').trim();
+  return text.length > max ? null : text;
 }
 
-function appendMissingHeaders(sheet, columns) {
-  if (sheet.getLastRow() < 1) {
-    sheet.appendRow(columns);
-    return;
-  }
-  const header = sheet.getDataRange().getValues()[0].map(cell => String(cell == null ? '' : cell).trim());
-  const present = {};
-  header.forEach(name => {
-    if (name) present[name] = true;
-  });
-  const missing = columns.filter(name => !present[name]);
-  if (!missing.length) return;
-  let col = header.length;
-  missing.forEach(name => {
-    col += 1;
-    sheet.getRange(1, col).setValue(name);
-  });
+function requireText(value, max, label, required) {
+  const text = cleanText(value, max);
+  if (text === null) throw appError('INVALID', label + ' is too long (max ' + max + ' characters).');
+  if (required && !text) throw appError('INVALID', label + ' is required.');
+  return text;
 }
 
-function getSheet(ss, name) {
-  return ss.getSheetByName(name);
+function validId(value) {
+  const id = typeof value === 'string' ? value.trim() : (typeof value === 'number' ? String(value) : '');
+  return /^[A-Za-z0-9_-]{1,64}$/.test(id) ? id : '';
+}
+
+function requireId(value, label) {
+  const id = validId(value);
+  if (!id) throw appError('INVALID', 'Invalid ' + label);
+  return id;
+}
+
+function normalizeEmail(value) {
+  const email = String(value == null ? '' : value).trim().toLowerCase();
+  if (!email || email.length > LIMITS.email) return '';
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
+}
+
+function validGradYear(value) {
+  const text = cleanText(value, 4);
+  if (text === '' ) return '';
+  if (!text || !/^\d{4}$/.test(text)) throw appError('INVALID', 'Graduation year must be a 4-digit year.');
+  const n = Number(text);
+  if (n < 2000 || n > 2100) throw appError('INVALID', 'Graduation year is out of range.');
+  return text;
+}
+
+// Sheets treats strings starting with = + - @ (and tab/CR) as formulas. A
+// leading apostrophe stores them as literal text; Sheets hides the apostrophe
+// and getValues() returns the original string.
+function safeCell(value) {
+  if (typeof value === 'string' && /^[=+\-@\t\r]/.test(value)) return "'" + value;
+  return value;
+}
+
+// ---------- tables (name-indexed) ----------
+
+function headerOf(values) {
+  return (values[0] || []).map(cell => String(cell == null ? '' : cell).trim());
 }
 
 function cellNonEmpty(value) {
@@ -165,74 +244,297 @@ function cellNonEmpty(value) {
   return true;
 }
 
-function rowsToObjects(sheet) {
-  const data = sheet.getDataRange().getValues();
-  if (data.length < 2) return [];
-  const headers = data[0];
-  return data.slice(1).map(row => {
-    const obj = {};
-    headers.forEach((h, i) => { obj[h] = row[i]; });
-    return obj;
-  }).filter(row => Object.keys(row).some(key => cellNonEmpty(row[key])));
+// Reads one sheet once and validates that every required column exists
+// exactly once. Never mutates the sheet: a missing sheet or column is a
+// setup error the owner fixes with setupSchema.
+function readTable(ss, name) {
+  const sheet = ss.getSheetByName(name);
+  if (!sheet) throw appError('SETUP_REQUIRED', 'The "' + name + '" sheet is missing. The owner needs to run setup.');
+  const values = sheet.getLastRow() < 1 ? [[]] : sheet.getDataRange().getValues();
+  const header = headerOf(values);
+  const col = {};
+  SCHEMA[name].forEach(key => {
+    const first = header.indexOf(key);
+    if (first === -1) throw appError('SETUP_REQUIRED', 'The "' + name + '" sheet is missing the "' + key + '" column. The owner needs to run setup.');
+    if (header.indexOf(key, first + 1) !== -1) throw appError('SCHEMA', 'The "' + name + '" sheet has a duplicate "' + key + '" column.');
+    col[key] = first;
+  });
+  return { name: name, sheet: sheet, values: values, header: header, col: col };
 }
 
+function rowObject(table, r) {
+  const row = table.values[r] || [];
+  const obj = {};
+  SCHEMA[table.name].forEach(key => {
+    const v = row[table.col[key]];
+    obj[key] = v === undefined ? '' : v;
+  });
+  return obj;
+}
+
+function tableRows(table) {
+  const out = [];
+  for (let r = 1; r < table.values.length; r++) {
+    const row = table.values[r] || [];
+    if (!row.some(cellNonEmpty)) continue;
+    out.push(rowObject(table, r));
+  }
+  return out;
+}
+
+function findRows(table, predicate) {
+  const hits = [];
+  for (let r = 1; r < table.values.length; r++) {
+    if (predicate(rowObject(table, r), r)) hits.push(r);
+  }
+  return hits;
+}
+
+function appendObject(table, obj) {
+  const width = Math.max(table.header.length, 1);
+  const row = [];
+  for (let c = 0; c < width; c++) {
+    const key = table.header[c];
+    row.push(Object.prototype.hasOwnProperty.call(obj, key) && SCHEMA[table.name].indexOf(key) !== -1 ? safeCell(obj[key]) : '');
+  }
+  table.sheet.appendRow(row);
+  table.values.push(row.map(v => (typeof v === 'string' && v.charAt(0) === "'" ? v.slice(1) : v)));
+}
+
+// One range write per row update. Only the span between the first and last
+// changed schema column is written, so unrelated legacy columns are untouched.
+function updateObject(table, r, changes) {
+  const keys = Object.keys(changes).filter(key => table.col[key] !== undefined);
+  if (!keys.length) return;
+  const cols = keys.map(key => table.col[key]);
+  const start = Math.min.apply(null, cols);
+  const end = Math.max.apply(null, cols);
+  const current = (table.values[r] || []).slice();
+  const out = [];
+  for (let c = start; c <= end; c++) {
+    const key = table.header[c];
+    const changed = keys.indexOf(key) !== -1;
+    const value = changed ? changes[key] : (current[c] === undefined ? '' : current[c]);
+    out.push(safeCell(value));
+    current[c] = value;
+  }
+  table.sheet.getRange(r + 1, start + 1, 1, end - start + 1).setValues([out]);
+  table.values[r] = current;
+}
+
+function deleteRowIndexes(table, indexes) {
+  indexes.slice().sort((a, b) => b - a).forEach(r => {
+    table.sheet.deleteRow(r + 1);
+    table.values.splice(r, 1);
+  });
+}
+
+function withLock(fn) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(LOCK_WAIT_MS);
+  } catch (err) {
+    throw appError('BUSY', 'The server is busy. Try again in a moment.');
+  }
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Optional idempotency for creates: the client sends a requestId and a replay
+// of the same request returns the first result instead of a second row.
+function idempotent(requestId, fn) {
+  const id = validId(requestId);
+  const cache = id && typeof CacheService !== 'undefined' ? CacheService.getScriptCache() : null;
+  if (cache) {
+    const hit = cache.get('req:' + id);
+    if (hit) return JSON.parse(hit);
+  }
+  const result = fn();
+  if (cache && result && !result.error) cache.put('req:' + id, JSON.stringify(result), 600);
+  return result;
+}
+
+// ---------- schema setup (owner only, explicit) ----------
+
+function setupSchema(ss) {
+  return withLock(() => {
+    const created = [];
+    const added = [];
+    Object.keys(SCHEMA).forEach(name => {
+      const columns = SCHEMA[name];
+      let sheet = ss.getSheetByName(name);
+      if (!sheet) {
+        sheet = ss.insertSheet(name);
+        sheet.appendRow(columns);
+        created.push(name);
+        return;
+      }
+      if (sheet.getLastRow() < 1) {
+        sheet.appendRow(columns);
+        added.push(name + ': ' + columns.join(', '));
+        return;
+      }
+      const values = sheet.getDataRange().getValues();
+      const header = headerOf(values);
+      if (name === 'Recruits' && !sameHeader(header, columns) && !hasDataRows(values)) {
+        // An empty legacy Recruits sheet gets the current header in place.
+        sheet.getRange(1, 1, 1, columns.length).setValues([columns]);
+        const width = header.length;
+        if (width > columns.length) sheet.getRange(1, columns.length + 1, 1, width - columns.length).clearContent();
+        added.push('Recruits: reset empty legacy header');
+        return;
+      }
+      // Never reorder or delete existing columns; append any missing ones.
+      const missing = columns.filter(key => header.indexOf(key) === -1);
+      if (!missing.length) return;
+      let width = header.length;
+      while (width > 0 && header[width - 1] === '') width -= 1;
+      sheet.getRange(1, width + 1, 1, missing.length).setValues([missing]);
+      added.push(name + ': ' + missing.join(', '));
+    });
+    return { ok: true, schemaVersion: SCHEMA_VERSION, created: created, added: added };
+  });
+}
+
+function sameHeader(header, columns) {
+  const got = header.slice();
+  while (got.length && got[got.length - 1] === '') got.pop();
+  return got.length === columns.length && columns.every((c, i) => got[i] === c);
+}
+
+function hasDataRows(values) {
+  for (let r = 1; r < values.length; r++) {
+    if ((values[r] || []).some(cellNonEmpty)) return true;
+  }
+  return false;
+}
+
+// ---------- users ----------
+
 function emailsEqual(a, b) {
-  return String(a || '').toLowerCase() === String(b || '').toLowerCase();
+  return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 }
 
 function publicUser(row) {
-  return {
-    email: String(row.email).toLowerCase(),
-    name: row.name,
-    role: row.role
-  };
+  return { email: String(row.email).trim().toLowerCase(), name: row.name, role: row.role };
+}
+
+function isActive(row) {
+  return String(row.active).trim().toLowerCase() === 'yes';
 }
 
 function findActiveUser(users, email) {
-  return users.find(u => emailsEqual(u.email, email) && String(u.active) === 'yes') || null;
+  return users.find(u => emailsEqual(u.email, email) && isActive(u)) || null;
 }
 
-function bootstrap(ss, user) {
-  const usersSheet = getSheet(ss, 'Users');
-  const existing = rowsToObjects(usersSheet);
-  if (existing.length === 0) {
+function bootstrap(ss, user, config) {
+  const users = tableRows(readTable(ss, 'Users'));
+  if (users.length === 0) {
+    if (!config.ownerEmail || user.email !== config.ownerEmail) {
+      return errorResult('FORBIDDEN', 'Not authorized. Ask an admin to add you.');
+    }
     return withLock(() => {
-      const again = rowsToObjects(usersSheet);
+      const table = readTable(ss, 'Users');
+      const again = tableRows(table);
       if (again.length === 0) {
-        const email = String(user.email).toLowerCase();
-        usersSheet.appendRow([email, user.name, 'admin', 'yes']);
-        return { email: email, name: user.name, role: 'admin', bootstrapped: true };
+        const name = cleanText(user.name, LIMITS.name) || user.email;
+        appendObject(table, { email: user.email, name: name, role: 'admin', active: 'yes' });
+        return { email: user.email, name: name, role: 'admin', bootstrapped: true };
       }
       const me = findActiveUser(again, user.email);
-      return me ? publicUser(me) : { error: 'Not authorized. Ask an admin to add you.' };
+      return me ? publicUser(me) : errorResult('FORBIDDEN', 'Not authorized. Ask an admin to add you.');
     });
   }
-  const me = findActiveUser(existing, user.email);
-  return me ? publicUser(me) : { error: 'Not authorized. Ask an admin to add you.' };
+  const me = findActiveUser(users, user.email);
+  return me ? publicUser(me) : errorResult('FORBIDDEN', 'Not authorized. Ask an admin to add you.');
 }
 
 function getMe(ss, user) {
-  const users = rowsToObjects(getSheet(ss, 'Users'));
-  const me = findActiveUser(users, user.email);
-  if (!me) return { error: 'Not authorized' };
+  const me = findActiveUser(tableRows(readTable(ss, 'Users')), user.email);
+  if (!me) return errorResult('FORBIDDEN', 'Not authorized');
   return publicUser(me);
 }
 
-function requireAdmin(ss, user) {
-  const me = getMe(ss, user);
-  if (me.error || me.role !== 'admin') throw new Error('Admin only');
-  return true;
+function activeAdminEmails(rows) {
+  return rows.filter(u => String(u.role) === 'admin' && isActive(u)).map(u => String(u.email).trim().toLowerCase());
 }
 
-function getVoteData(ss, user) {
-  const me = getMe(ss, user);
-  if (me.error) return me;
-  const recruits = rowsToObjects(getSheet(ss, 'Recruits'));
-  const events = rowsToObjects(getSheet(ss, 'Events'));
-  const attendance = rowsToObjects(getSheet(ss, 'EventRecruits'));
-  const votes = rowsToObjects(getSheet(ss, 'Votes')).filter(v => emailsEqual(v.userEmail, user.email));
-  return { me, recruits, events, attendance, myVotes: votes };
+function manageUser(ss, user, body) {
+  const op = String(body && body.op || '');
+  const email = normalizeEmail(body && body.email);
+  if (!email) return errorResult('INVALID', 'Enter a valid email address.');
+  const actor = String(user && user.email || '').toLowerCase();
+  if (op === 'add') {
+    const role = body.role == null ? 'brother' : String(body.role);
+    if (ROLES.indexOf(role) === -1) return errorResult('INVALID', 'Invalid role');
+    const name = requireText(body.name, LIMITS.name, 'Name', false) || email;
+    return withLock(() => {
+      const table = readTable(ss, 'Users');
+      if (findRows(table, row => emailsEqual(row.email, email)).length) return errorResult('CONFLICT', 'User already exists');
+      appendObject(table, { email: email, name: name, role: role, active: 'yes' });
+      return { ok: true };
+    });
+  }
+  if (op === 'remove') {
+    if (email === actor) return errorResult('FORBIDDEN', 'You cannot remove yourself');
+    return withLock(() => {
+      const table = readTable(ss, 'Users');
+      const admins = activeAdminEmails(tableRows(table));
+      if (admins.length === 1 && admins[0] === email) return errorResult('FORBIDDEN', 'Cannot remove the last admin');
+      deleteRowIndexes(table, findRows(table, row => emailsEqual(row.email, email)));
+      return { ok: true };
+    });
+  }
+  if (op === 'setRole') {
+    const role = String(body.role || '');
+    if (ROLES.indexOf(role) === -1) return errorResult('INVALID', 'Invalid role');
+    return withLock(() => {
+      const table = readTable(ss, 'Users');
+      const admins = activeAdminEmails(tableRows(table));
+      if (role !== 'admin' && admins.length === 1 && admins[0] === email) {
+        return errorResult('FORBIDDEN', 'Cannot demote the last admin');
+      }
+      const hits = findRows(table, row => emailsEqual(row.email, email));
+      if (!hits.length) return errorResult('NOT_FOUND', 'User not found');
+      hits.forEach(r => updateObject(table, r, { role: role }));
+      return { ok: true };
+    });
+  }
+  return errorResult('INVALID', 'Unknown user operation');
 }
+
+// ---------- reads ----------
+
+function getVoteData(ss, me) {
+  const recruits = tableRows(readTable(ss, 'Recruits')).map(r => ({
+    id: r.id, name: r.name, major: r.major, secondMajor: r.secondMajor, gradYear: r.gradYear, photoFileId: r.photoFileId,
+  }));
+  const events = tableRows(readTable(ss, 'Events'));
+  const attendance = tableRows(readTable(ss, 'EventRecruits'));
+  const myVotes = tableRows(readTable(ss, 'Votes'))
+    .filter(v => emailsEqual(v.userEmail, me.email))
+    .map(v => ({ eventId: v.eventId, recruitId: v.recruitId, score: v.score }));
+  return { me: me, recruits: recruits, events: events, attendance: attendance, myVotes: myVotes };
+}
+
+function getAdminData(ss) {
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    recruits: tableRows(readTable(ss, 'Recruits')),
+    events: tableRows(readTable(ss, 'Events')),
+    attendance: tableRows(readTable(ss, 'EventRecruits')),
+    votes: tableRows(readTable(ss, 'Votes')),
+    notes: tableRows(readTable(ss, 'Notes')),
+    users: tableRows(readTable(ss, 'Users')).map(u => ({
+      email: String(u.email).trim().toLowerCase(), name: u.name, role: u.role, active: u.active,
+    })),
+  };
+}
+
+// ---------- votes ----------
 
 function scoreValue(score) {
   if (typeof score === 'boolean' || score === null || score === undefined || score === '') return null;
@@ -241,207 +543,159 @@ function scoreValue(score) {
   return n;
 }
 
+function idExists(table, id) {
+  return findRows(table, row => String(row.id) === id).length > 0;
+}
+
+function attended(table, eventId, recruitId) {
+  return findRows(table, row => String(row.eventId) === eventId && String(row.recruitId) === recruitId).length > 0;
+}
+
+// Authorization and relationship checks run inside the lock so a member
+// removed (or a recruit/event deleted, or attendance unchecked) after the page
+// loaded cannot write. Any failure returns before a single cell is written.
 function castVote(ss, user, body) {
-  const eventId = body.eventId;
-  const recruitId = body.recruitId;
-  const score = scoreValue(body.score);
-  if (!eventId || !recruitId || score === null) return { error: 'Invalid vote' };
+  const eventId = validId(body && body.eventId);
+  const recruitId = validId(body && body.recruitId);
+  const score = scoreValue(body && body.score);
+  if (!eventId || !recruitId || score === null) return errorResult('INVALID', 'Invalid vote');
   return withLock(() => {
-    const email = String(user.email || '').toLowerCase();
-    const sheet = getSheet(ss, 'Votes');
-    const data = sheet.getDataRange().getValues();
-    const matches = [];
-    for (let i = 1; i < data.length; i++) {
-      if (String(data[i][0]) === String(eventId) && String(data[i][1]) === String(recruitId) && emailsEqual(data[i][2], email)) {
-        matches.push(i);
-      }
-    }
+    const me = findActiveUser(tableRows(readTable(ss, 'Users')), user.email);
+    if (!me) return errorResult('FORBIDDEN', 'Not authorized');
+    if (!idExists(readTable(ss, 'Events'), eventId)) return errorResult('INVALID', 'Invalid vote');
+    if (!idExists(readTable(ss, 'Recruits'), recruitId)) return errorResult('INVALID', 'Invalid vote');
+    if (!attended(readTable(ss, 'EventRecruits'), eventId, recruitId)) return errorResult('INVALID', 'Invalid vote');
+    const email = String(user.email).toLowerCase();
+    const table = readTable(ss, 'Votes');
+    const matches = findRows(table, row => String(row.eventId) === eventId && String(row.recruitId) === recruitId && emailsEqual(row.userEmail, email));
+    const timestamp = new Date().toISOString();
     if (matches.length === 0) {
-      sheet.appendRow([eventId, recruitId, email, score, new Date().toISOString()]);
+      appendObject(table, { eventId: eventId, recruitId: recruitId, userEmail: email, score: score, timestamp: timestamp });
     } else {
-      const keep = matches[0];
-      sheet.getRange(keep + 1, 3).setValue(email);
-      sheet.getRange(keep + 1, 4).setValue(score);
-      sheet.getRange(keep + 1, 5).setValue(new Date().toISOString());
-      for (let m = matches.length - 1; m >= 1; m--) {
-        sheet.deleteRow(matches[m] + 1);
-      }
+      updateObject(table, matches[0], { userEmail: email, score: score, timestamp: timestamp });
+      deleteRowIndexes(table, matches.slice(1));
     }
-    return { ok: true };
+    return { ok: true, eventId: eventId, recruitId: recruitId, score: score };
   });
 }
 
-function getAdminData(ss) {
+// ---------- recruits, events, attendance, notes ----------
+
+function recruitFields(source) {
   return {
-    recruits: rowsToObjects(getSheet(ss, 'Recruits')),
-    events: rowsToObjects(getSheet(ss, 'Events')),
-    attendance: rowsToObjects(getSheet(ss, 'EventRecruits')),
-    votes: rowsToObjects(getSheet(ss, 'Votes')),
-    notes: rowsToObjects(getSheet(ss, 'Notes')),
-    users: rowsToObjects(getSheet(ss, 'Users'))
+    name: requireText(source.name, LIMITS.name, 'Name', true),
+    major: requireText(source.major, LIMITS.major, 'Major', true),
+    secondMajor: requireText(source.secondMajor, LIMITS.major, 'Second major', false),
+    gradYear: validGradYear(source.gradYear),
   };
 }
 
-function textField(value) {
-  if (value === null || value === undefined) return '';
-  return String(value).trim();
-}
-
 function addRecruit(ss, body) {
-  return withLock(() => {
-    const sheet = getSheet(ss, 'Recruits');
-    const header = sheet.getDataRange().getValues()[0].map(cell => String(cell == null ? '' : cell).trim());
-    const id = Utilities.getUuid();
-    const source = body || {};
-    const values = {
-      id: id,
-      name: textField(source.name),
-      major: textField(source.major),
-      secondMajor: textField(source.secondMajor),
-      gradYear: textField(source.gradYear),
-      photoFileId: '',
-      photoSource: ''
-    };
+  const source = body || {};
+  const fields = recruitFields(source);
+  if (fields.secondMajor && fields.secondMajor.toLowerCase() === fields.major.toLowerCase()) {
+    return errorResult('INVALID', 'Second major must be different from the major.');
+  }
+  return idempotent(source.requestId, () => {
+    // Drive writes happen before (outside) the Sheet lock.
+    let photoFileId = '';
     const rawPhoto = source.photoDataBase64;
-    if (rawPhoto != null && textField(rawPhoto) !== '') {
-      const bytes = decodePhoto(rawPhoto);
-      values.photoFileId = savePhotoFile(ss, values.name, bytes);
-      values.photoSource = 'upload';
+    if (rawPhoto != null && String(rawPhoto).trim() !== '') {
+      photoFileId = savePhotoFile(ss, fields.name, decodePhoto(rawPhoto));
     }
-    const row = header.map(key => Object.prototype.hasOwnProperty.call(values, key) ? values[key] : '');
-    sheet.appendRow(row);
-    const result = { id: id };
-    if (values.photoFileId) {
-      result.photoFileId = values.photoFileId;
-      result.photoSource = 'upload';
-    }
-    return result;
+    return withLock(() => {
+      const table = readTable(ss, 'Recruits');
+      const id = Utilities.getUuid();
+      appendObject(table, {
+        id: id, name: fields.name, major: fields.major, secondMajor: fields.secondMajor, gradYear: fields.gradYear,
+        photoFileId: photoFileId, photoSource: photoFileId ? 'upload' : '',
+      });
+      const result = { id: id };
+      if (photoFileId) {
+        result.photoFileId = photoFileId;
+        result.photoSource = 'upload';
+      }
+      return result;
+    });
   });
 }
 
-function deleteRecruit(ss, body) {
+// Deleting a recruit or event removes only that row. Votes, notes and
+// attendance that reference it are kept as history and excluded from active
+// tallies (see src/lib/tally.js), so a mistaken delete never destroys scores.
+function deleteById(ss, sheetName, body) {
+  const id = requireId(body && body.id, 'id');
   return withLock(() => {
-    const sheet = getSheet(ss, 'Recruits');
-    const data = sheet.getDataRange().getValues();
-    for (let i = data.length - 1; i >= 1; i--) {
-      if (data[i][0] === body.id) sheet.deleteRow(i + 1);
-    }
+    const table = readTable(ss, sheetName);
+    deleteRowIndexes(table, findRows(table, row => String(row.id) === id));
     return { ok: true };
   });
 }
+
+function deleteRecruit(ss, body) { return deleteById(ss, 'Recruits', body); }
+function deleteEvent(ss, body) { return deleteById(ss, 'Events', body); }
 
 function addEvent(ss, body) {
-  return withLock(() => {
+  const name = requireText(body && body.name, LIMITS.name, 'Event name', true);
+  return idempotent(body && body.requestId, () => withLock(() => {
+    const table = readTable(ss, 'Events');
     const id = Utilities.getUuid();
-    getSheet(ss, 'Events').appendRow([id, body.name || '']);
-    return { id };
-  });
+    appendObject(table, { id: id, name: name });
+    return { id: id };
+  }));
 }
 
-function deleteEvent(ss, body) {
+// Desired-state attendance: replaying the same request is harmless, unlike a
+// toggle that flips back on a retry.
+function setAttendance(ss, body) {
+  const eventId = requireId(body && body.eventId, 'event');
+  const recruitId = requireId(body && body.recruitId, 'recruit');
+  if (typeof body.present !== 'boolean') return errorResult('INVALID', 'Invalid attendance');
   return withLock(() => {
-    const sheet = getSheet(ss, 'Events');
-    const data = sheet.getDataRange().getValues();
-    for (let i = data.length - 1; i >= 1; i--) {
-      if (data[i][0] === body.id) sheet.deleteRow(i + 1);
-    }
-    return { ok: true };
-  });
-}
-
-function toggleAttendance(ss, body) {
-  return withLock(() => {
-    const sheet = getSheet(ss, 'EventRecruits');
-    const data = sheet.getDataRange().getValues();
-    let exists = false;
-    for (let i = data.length - 1; i >= 1; i--) {
-      if (data[i][0] === body.eventId && data[i][1] === body.recruitId) {
-        sheet.deleteRow(i + 1);
-        exists = true;
-      }
-    }
-    if (!exists) sheet.appendRow([body.eventId, body.recruitId]);
-    return { ok: true };
+    if (!idExists(readTable(ss, 'Events'), eventId)) return errorResult('NOT_FOUND', 'Event not found');
+    if (!idExists(readTable(ss, 'Recruits'), recruitId)) return errorResult('NOT_FOUND', 'Recruit not found');
+    const table = readTable(ss, 'EventRecruits');
+    const hits = findRows(table, row => String(row.eventId) === eventId && String(row.recruitId) === recruitId);
+    if (body.present && hits.length === 0) appendObject(table, { eventId: eventId, recruitId: recruitId });
+    if (!body.present && hits.length) deleteRowIndexes(table, hits);
+    if (body.present && hits.length > 1) deleteRowIndexes(table, hits.slice(1));
+    return { ok: true, present: body.present };
   });
 }
 
 function saveNote(ss, body) {
+  const recruitId = requireId(body && body.recruitId, 'recruit');
+  const content = requireText(body && body.content, LIMITS.note, 'Note', false);
   return withLock(() => {
-    const sheet = getSheet(ss, 'Notes');
-    const data = sheet.getDataRange().getValues();
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][0] === body.recruitId) {
-        sheet.getRange(i + 1, 2).setValue(body.content);
-        sheet.getRange(i + 1, 3).setValue(new Date().toISOString());
-        return { ok: true };
-      }
-    }
-    sheet.appendRow([body.recruitId, body.content, new Date().toISOString()]);
-    return { ok: true };
+    if (!idExists(readTable(ss, 'Recruits'), recruitId)) return errorResult('NOT_FOUND', 'Recruit not found');
+    const table = readTable(ss, 'Notes');
+    const updatedAt = new Date().toISOString();
+    const hits = findRows(table, row => String(row.recruitId) === recruitId);
+    if (hits.length) updateObject(table, hits[0], { content: content, updatedAt: updatedAt });
+    else appendObject(table, { recruitId: recruitId, content: content, updatedAt: updatedAt });
+    return { ok: true, updatedAt: updatedAt };
   });
 }
 
-function isLastActiveAdmin(data, email) {
-  const admins = [];
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][2]) === 'admin' && String(data[i][3]) === 'yes') {
-      admins.push(String(data[i][0] || '').toLowerCase());
-    }
-  }
-  return admins.length === 1 && admins[0] === String(email || '').toLowerCase();
-}
+// Wipe requires a typed confirmation and the counts the admin saw. If anyone
+// added data since then, the counts differ and nothing is cleared.
+const WIPE_CONFIRMATION = 'WIPE CYCLE';
+const WIPE_SHEETS = ['Recruits', 'Events', 'EventRecruits', 'Votes', 'Notes'];
 
-function manageUser(ss, user, body) {
+function wipeCycle(ss, body) {
+  if (!body || body.confirm !== WIPE_CONFIRMATION) return errorResult('INVALID', 'Type ' + WIPE_CONFIRMATION + ' to confirm.');
+  const expected = body.expected || {};
   return withLock(() => {
-    const sheet = getSheet(ss, 'Users');
-    const email = String(body.email || '').toLowerCase();
-    const actor = String((user && user.email) || '').toLowerCase();
-    const data = sheet.getDataRange().getValues();
-
-    if (body.op === 'add') {
-      for (let i = 1; i < data.length; i++) {
-        if (String(data[i][0] || '').toLowerCase() === email) {
-          return { error: 'User already exists' };
-        }
-      }
-      sheet.appendRow([email, body.name || body.email || email, body.role || 'brother', 'yes']);
-      return { ok: true };
-    }
-
-    if (body.op === 'remove') {
-      if (email && email === actor) return { error: 'You cannot remove yourself' };
-      if (isLastActiveAdmin(data, email)) return { error: 'Cannot remove the last admin' };
-      for (let i = data.length - 1; i >= 1; i--) {
-        if (String(data[i][0] || '').toLowerCase() === email) sheet.deleteRow(i + 1);
-      }
-      return { ok: true };
-    }
-
-    if (body.op === 'setRole') {
-      if (body.role !== 'admin' && isLastActiveAdmin(data, email)) {
-        return { error: 'Cannot demote the last admin' };
-      }
-      for (let i = 1; i < data.length; i++) {
-        if (String(data[i][0] || '').toLowerCase() === email) {
-          sheet.getRange(i + 1, 3).setValue(body.role);
-        }
-      }
-      return { ok: true };
-    }
-
-    return { error: 'Unknown user operation' };
-  });
-}
-
-function wipeCycle(ss) {
-  return withLock(() => {
-    ['Recruits', 'Events', 'EventRecruits', 'Votes', 'Notes'].forEach(name => {
-      const sheet = getSheet(ss, name);
-      if (sheet && sheet.getLastRow() > 1) {
-        sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
-      }
+    const tables = WIPE_SHEETS.map(name => readTable(ss, name));
+    const counts = {};
+    tables.forEach(t => { counts[t.name] = tableRows(t).length; });
+    const changed = WIPE_SHEETS.some(name => Number(expected[name]) !== counts[name]);
+    if (changed) return errorResult('CONFLICT', 'Data changed since you opened this page. Reload and try again.');
+    tables.forEach(t => {
+      const last = t.sheet.getLastRow();
+      if (last > 1) t.sheet.getRange(2, 1, last - 1, Math.max(t.sheet.getLastColumn(), 1)).clearContent();
     });
-    return { ok: true, message: 'Cycle wiped. Users preserved.' };
+    return { ok: true, cleared: counts, message: 'Cycle wiped. Users preserved.' };
   });
 }
 
@@ -616,39 +870,69 @@ function planPhotoLinks(files, recruits) {
   return { linked: linked, unmatched: unmatched };
 }
 
+// ---------- photos ----------
+
 const PHOTO_FOLDER_NAME = 'Recruit Photos';
 const PHOTO_FOLDER_PROP = 'PHOTO_FOLDER_ID';
 const PHOTO_FETCH_LIMIT = 20;
+const PHOTO_UNAVAILABLE = 'Recruit photos are unavailable right now. The script owner may need to re-authorize Drive access. Everything else still works.';
 
-function getPhotoFolder(ss) {
+function textField(value) {
+  if (value === null || value === undefined) return '';
+  return String(value).trim();
+}
+
+// Drive access is wrapped so a missing grant or folder becomes one stable,
+// photo-scoped error instead of a raw Google exception.
+function driveCall(fn) {
+  try {
+    return fn();
+  } catch (err) {
+    if (err && err.publicCode) throw err;
+    throw appError('PHOTO_UNAVAILABLE', PHOTO_UNAVAILABLE);
+  }
+}
+
+// create=false never creates anything (used by reads). Only explicit admin
+// actions (sync, upload) may create the folder beside the spreadsheet.
+function getPhotoFolder(ss, create) {
   const props = PropertiesService.getScriptProperties();
   const cached = props.getProperty(PHOTO_FOLDER_PROP);
   if (cached) {
-    try {
-      const existing = DriveApp.getFolderById(cached);
-      if (existing && existing.getName() === PHOTO_FOLDER_NAME) return existing;
-    } catch (err) {}
+    let existing = null;
+    try { existing = DriveApp.getFolderById(cached); } catch (err) { existing = null; }
+    if (existing && existing.getName() === PHOTO_FOLDER_NAME) return existing;
   }
-  const file = DriveApp.getFileById(ss.getId());
-  const parents = file.getParents();
-  if (!parents.hasNext()) throw new Error('Spreadsheet has no parent folder');
-  const parent = parents.next();
-  const found = parent.getFoldersByName(PHOTO_FOLDER_NAME);
-  const folder = found.hasNext() ? found.next() : parent.createFolder(PHOTO_FOLDER_NAME);
-  props.setProperty(PHOTO_FOLDER_PROP, folder.getId());
-  return folder;
+  return driveCall(() => {
+    const file = DriveApp.getFileById(ss.getId());
+    const parents = file.getParents();
+    if (!parents.hasNext()) throw appError('PHOTO_UNAVAILABLE', 'The spreadsheet has no parent folder for photos.');
+    const parent = parents.next();
+    const found = parent.getFoldersByName(PHOTO_FOLDER_NAME);
+    if (found.hasNext()) {
+      const folder = found.next();
+      props.setProperty(PHOTO_FOLDER_PROP, folder.getId());
+      return folder;
+    }
+    if (!create) return null;
+    const folder = parent.createFolder(PHOTO_FOLDER_NAME);
+    props.setProperty(PHOTO_FOLDER_PROP, folder.getId());
+    return folder;
+  });
 }
 
 function listImageFiles(folder) {
-  const files = [];
-  const iterator = folder.getFiles();
-  while (iterator.hasNext()) {
-    const file = iterator.next();
-    const mime = String(file.getMimeType() || '');
-    if (mime.indexOf('image/') !== 0) continue;
-    files.push({ fileId: file.getId(), fileName: file.getName() });
-  }
-  return files;
+  return driveCall(() => {
+    const files = [];
+    const iterator = folder.getFiles();
+    while (iterator.hasNext()) {
+      const file = iterator.next();
+      const mime = String(file.getMimeType() || '');
+      if (mime.indexOf('image/') !== 0) continue;
+      files.push({ fileId: file.getId(), fileName: file.getName() });
+    }
+    return files;
+  });
 }
 
 function decodePhoto(dataBase64) {
@@ -656,60 +940,39 @@ function decodePhoto(dataBase64) {
   const marker = raw.indexOf('base64,');
   if (marker !== -1) raw = raw.slice(marker + 'base64,'.length);
   raw = raw.replace(/\s/g, '');
-  if (!raw) throw new Error('Missing photo data');
-  if (raw.length > 500000) throw new Error('Photo is too large');
+  if (!raw) throw appError('INVALID', 'Missing photo data');
+  if (raw.length > 500000) throw appError('INVALID', 'Photo is too large');
+  if (!/^[A-Za-z0-9+/=]+$/.test(raw)) throw appError('INVALID', 'Photo data is not valid');
   return Utilities.base64Decode(raw);
 }
 
 function savePhotoFile(ss, recruitName, bytes) {
-  const folder = getPhotoFolder(ss);
+  const folder = getPhotoFolder(ss, true);
   const safe = textField(recruitName).replace(/[\\/]/g, ' ').replace(/\s+/g, ' ').trim() || 'Recruit';
-  const blob = Utilities.newBlob(bytes, 'image/jpeg', safe + '.jpg');
-  const file = folder.createFile(blob);
-  return file.getId();
+  return driveCall(() => {
+    const blob = Utilities.newBlob(bytes, 'image/jpeg', safe + '.jpg');
+    return folder.createFile(blob).getId();
+  });
 }
 
-function headerOf(values) {
-  return (values[0] || []).map(cell => String(cell == null ? '' : cell).trim());
-}
-
-function columnIndex(header, name) {
-  return header.indexOf(name);
-}
-
-function recruitRow(values, header, recruitId) {
-  const idCol = columnIndex(header, 'id');
-  const nameCol = columnIndex(header, 'name');
-  const fileCol = columnIndex(header, 'photoFileId');
-  const sourceCol = columnIndex(header, 'photoSource');
-  if (idCol < 0 || fileCol < 0 || sourceCol < 0) throw new Error('Recruits sheet is missing photo columns');
-  for (let i = 1; i < values.length; i++) {
-    if (String(values[i][idCol]) === String(recruitId)) {
-      return {
-        row: i,
-        name: nameCol < 0 ? '' : textField(values[i][nameCol]),
-        photoFileId: textField(values[i][fileCol]),
-        photoSource: textField(values[i][sourceCol]),
-        fileCol: fileCol,
-        sourceCol: sourceCol,
-      };
-    }
-  }
-  return null;
+function findRecruit(table, recruitId) {
+  const hits = findRows(table, row => String(row.id) === String(recruitId));
+  if (!hits.length) return null;
+  const row = rowObject(table, hits[0]);
+  return { r: hits[0], name: textField(row.name), photoFileId: textField(row.photoFileId), photoSource: textField(row.photoSource) };
 }
 
 function uploadPhoto(ss, body) {
+  const recruitId = requireId(body && body.recruitId, 'recruit');
+  const bytes = decodePhoto(body && body.dataBase64);
+  const before = findRecruit(readTable(ss, 'Recruits'), recruitId);
+  if (!before) return errorResult('NOT_FOUND', 'Recruit not found');
+  const fileId = savePhotoFile(ss, before.name, bytes);
   return withLock(() => {
-    const recruitId = textField(body && body.recruitId);
-    if (!recruitId) return { error: 'Missing recruit' };
-    const bytes = decodePhoto(body && body.dataBase64);
-    const sheet = getSheet(ss, 'Recruits');
-    const values = sheet.getDataRange().getValues();
-    const located = recruitRow(values, headerOf(values), recruitId);
-    if (!located) return { error: 'Recruit not found' };
-    const fileId = savePhotoFile(ss, located.name, bytes);
-    sheet.getRange(located.row + 1, located.fileCol + 1).setValue(fileId);
-    sheet.getRange(located.row + 1, located.sourceCol + 1).setValue('upload');
+    const table = readTable(ss, 'Recruits');
+    const located = findRecruit(table, recruitId);
+    if (!located) return errorResult('NOT_FOUND', 'Recruit not found');
+    updateObject(table, located.r, { photoFileId: fileId, photoSource: 'upload' });
     return { ok: true, photoFileId: fileId, photoSource: 'upload' };
   });
 }
@@ -734,119 +997,102 @@ function openDriveFile(fileId) {
   }
 }
 
-function getPhotos(ss, user, body) {
-  const me = getMe(ss, user);
-  if (me.error) return me;
+// Members can read only photos linked to a recruit row. Admins can also
+// preview unlinked images inside the Recruit Photos folder (for matching).
+// Reads never create the folder.
+function getPhotos(ss, me, body) {
   const requested = Array.isArray(body && body.ids) ? body.ids : [];
   const ids = [];
   const seen = {};
   for (let i = 0; i < requested.length && ids.length < PHOTO_FETCH_LIMIT; i++) {
-    const id = textField(requested[i]);
+    const id = validId(requested[i]);
     if (!id || seen[id]) continue;
     seen[id] = true;
     ids.push(id);
   }
   if (!ids.length) return { photos: {} };
-  const recruits = rowsToObjects(getSheet(ss, 'Recruits'));
   const allowed = {};
-  recruits.forEach(recruit => {
+  tableRows(readTable(ss, 'Recruits')).forEach(recruit => {
     const id = textField(recruit.photoFileId);
     if (id) allowed[id] = true;
   });
   const isAdmin = me.role === 'admin';
-  let folder = null;
+  let folder;
   const photos = {};
+  const missing = [];
   ids.forEach(id => {
     let file = null;
     if (allowed[id]) {
       file = openDriveFile(id);
     } else if (isAdmin) {
-      if (!folder) {
-        try { folder = getPhotoFolder(ss); } catch (err) { folder = null; }
+      if (folder === undefined) {
+        try { folder = getPhotoFolder(ss, false); } catch (err) { folder = null; }
       }
       file = openDriveFile(id);
       if (!fileInPhotoFolder(file, folder)) file = null;
     }
-    if (!file) return;
+    if (!file) { missing.push(id); return; }
     try {
       const blob = file.getBlob();
       const mime = blob.getContentType() || file.getMimeType() || 'image/jpeg';
+      if (String(mime).indexOf('image/') !== 0) { missing.push(id); return; }
       photos[id] = 'data:' + mime + ';base64,' + Utilities.base64Encode(blob.getBytes());
-    } catch (err) {}
-  });
-  return { photos: photos };
-}
-
-function recruitsFromValues(values) {
-  const header = headerOf(values);
-  const recruits = [];
-  for (let r = 1; r < values.length; r++) {
-    const row = values[r];
-    let any = false;
-    const obj = {};
-    for (let c = 0; c < header.length; c++) {
-      if (!header[c]) continue;
-      obj[header[c]] = row[c];
-      if (cellNonEmpty(row[c])) any = true;
+    } catch (err) {
+      missing.push(id);
     }
-    if (any) recruits.push(obj);
-  }
-  return { header: header, recruits: recruits };
-}
-
-function writeFolderLinks(sheet, values, header, linked) {
-  if (!linked || !linked.length) return;
-  const idCol = columnIndex(header, 'id');
-  const fileCol = columnIndex(header, 'photoFileId');
-  const sourceCol = columnIndex(header, 'photoSource');
-  if (idCol < 0 || fileCol < 0 || sourceCol < 0) throw new Error('Recruits sheet is missing photo columns');
-  const rowById = {};
-  for (let i = 1; i < values.length; i++) rowById[String(values[i][idCol])] = i;
-  linked.forEach(item => {
-    const row = rowById[String(item.recruitId)];
-    if (row == null) return;
-    if (textField(values[row][fileCol]) || textField(values[row][sourceCol])) return;
-    sheet.getRange(row + 1, fileCol + 1).setValue(item.fileId);
-    sheet.getRange(row + 1, sourceCol + 1).setValue('folder');
   });
+  return { photos: photos, missing: missing };
 }
 
+// Folder listing and fuzzy matching run OUTSIDE the lock so votes are never
+// blocked by Drive. The write phase re-reads Recruits under the lock and only
+// links rows that still exist and still have no photo.
 function syncPhotoFolder(ss) {
+  const folder = getPhotoFolder(ss, true);
+  const files = listImageFiles(folder);
+  const plan = planPhotoLinks(files, tableRows(readTable(ss, 'Recruits')));
   return withLock(() => {
-    const folder = getPhotoFolder(ss);
-    const files = listImageFiles(folder);
-    const sheet = getSheet(ss, 'Recruits');
-    const values = sheet.getDataRange().getValues();
-    const parsed = recruitsFromValues(values);
-    const plan = planPhotoLinks(files, parsed.recruits);
-    writeFolderLinks(sheet, values, parsed.header, plan.linked);
-    return plan;
+    const table = readTable(ss, 'Recruits');
+    const taken = {};
+    tableRows(table).forEach(r => { if (textField(r.photoFileId)) taken[textField(r.photoFileId)] = true; });
+    const linked = [];
+    plan.linked.forEach(item => {
+      const located = findRecruit(table, item.recruitId);
+      if (!located || located.photoFileId || located.photoSource || taken[item.fileId]) return;
+      updateObject(table, located.r, { photoFileId: item.fileId, photoSource: 'folder' });
+      taken[item.fileId] = true;
+      linked.push(item);
+    });
+    return { linked: linked, unmatched: plan.unmatched };
   });
 }
 
 function linkPhoto(ss, body) {
+  const fileId = validId(body && body.fileId);
+  const recruitId = validId(body && body.recruitId);
+  if (!fileId || !recruitId) return errorResult('INVALID', 'Missing photo link');
+  const folder = getPhotoFolder(ss, false);
+  const file = openDriveFile(fileId);
+  if (!fileInPhotoFolder(file, folder)) return errorResult('INVALID', 'Photo is not in the Recruit Photos folder');
   return withLock(() => {
-    const fileId = textField(body && body.fileId);
-    const recruitId = textField(body && body.recruitId);
-    if (!fileId || !recruitId) return { error: 'Missing photo link' };
-    const folder = getPhotoFolder(ss);
-    const file = openDriveFile(fileId);
-    if (!fileInPhotoFolder(file, folder)) return { error: 'Photo is not in the Recruit Photos folder' };
-    const sheet = getSheet(ss, 'Recruits');
-    const values = sheet.getDataRange().getValues();
-    const located = recruitRow(values, headerOf(values), recruitId);
-    if (!located) return { error: 'Recruit not found' };
-    if (located.photoFileId || located.photoSource) return { error: 'Recruit already has a photo' };
-    sheet.getRange(located.row + 1, located.fileCol + 1).setValue(fileId);
-    sheet.getRange(located.row + 1, located.sourceCol + 1).setValue('folder');
+    const table = readTable(ss, 'Recruits');
+    const located = findRecruit(table, recruitId);
+    if (!located) return errorResult('NOT_FOUND', 'Recruit not found');
+    if (located.photoFileId || located.photoSource) return errorResult('CONFLICT', 'Recruit already has a photo');
+    updateObject(table, located.r, { photoFileId: fileId, photoSource: 'folder' });
     return { ok: true, photoFileId: fileId, photoSource: 'folder' };
   });
 }
 
 if (typeof module !== 'undefined') {
   module.exports = {
+    API_VERSION: API_VERSION,
     doPost: doPost,
-    rowsToObjects: rowsToObjects,
+    verifyToken: verifyToken,
+    safeCell: safeCell,
+    readTable: readTable,
+    tableRows: tableRows,
+    setupSchema: setupSchema,
     castVote: castVote,
     manageUser: manageUser,
     bootstrap: bootstrap,
@@ -855,8 +1101,11 @@ if (typeof module !== 'undefined') {
     getAdminData: getAdminData,
     getVoteData: getVoteData,
     addRecruit: addRecruit,
-    ensureSheets: ensureSheets,
+    addEvent: addEvent,
+    setAttendance: setAttendance,
     deleteRecruit: deleteRecruit,
+    deleteEvent: deleteEvent,
+    wipeCycle: wipeCycle,
     uploadPhoto: uploadPhoto,
     getPhotos: getPhotos,
     syncPhotoFolder: syncPhotoFolder,
