@@ -47,7 +47,7 @@ async function loadBundle(mode) {
     platform: 'browser',
     outfile,
     jsx: 'automatic',
-    loader: { '.js': 'jsx' },
+    loader: { '.js': 'jsx', '.jpg': 'dataurl' },
     define: {
       'import.meta.env.VITE_APP_MODE': JSON.stringify(mode),
       'import.meta.env.VITE_GOOGLE_CLIENT_ID': 'undefined',

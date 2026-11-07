@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDemoBackend } from '../src/demo/demoBackend.js';
-import { demoSeed, DEMO_PERSONAS } from '../src/demo/seed.js';
+import { demoSeed, DEMO_PERSONAS } from './helpers/legacyDemoSeed.js';
 
 const ADMIN = DEMO_PERSONAS.find(p => p.role === 'admin').email;
 const VOTER = DEMO_PERSONAS.find(p => p.role === 'brother').email;
@@ -17,7 +17,7 @@ test('seed is fictional: reserved example.test emails only, no external URLs', (
 });
 
 test('voter: reads own votes, can vote only for attendees, cannot reach admin actions', async () => {
-  const b = createDemoBackend({ latencyMs: 0 });
+  const b = createDemoBackend({ latencyMs: 0, seed: demoSeed });
   const data = await b.call(VOTER, 'getVoteData');
   assert.ok(data.myVotes.every(v => v.eventId && v.score));
   assert.equal(data.votes, undefined);
@@ -31,7 +31,7 @@ test('voter: reads own votes, can vote only for attendees, cannot reach admin ac
 });
 
 test('admin: last-admin and self-removal guards, wipe guard, reset to seed', async () => {
-  const b = createDemoBackend({ latencyMs: 0 });
+  const b = createDemoBackend({ latencyMs: 0, seed: demoSeed });
   await assert.rejects(() => b.call(ADMIN, 'manageUser', { op: 'remove', email: ADMIN }), /cannot remove yourself/);
   await b.call(ADMIN, 'manageUser', { op: 'setRole', email: 'taylor.admin@example.test', role: 'brother' });
   await assert.rejects(() => b.call('taylor.admin@example.test', 'manageUser', { op: 'setRole', email: ADMIN, role: 'brother' }), /Admin only/);
@@ -51,7 +51,7 @@ test('admin: last-admin and self-removal guards, wipe guard, reset to seed', asy
 });
 
 test('creates are idempotent by requestId and attendance is desired-state', async () => {
-  const b = createDemoBackend({ latencyMs: 0 });
+  const b = createDemoBackend({ latencyMs: 0, seed: demoSeed });
   const a = await b.call(ADMIN, 'addEvent', { name: 'Mixer', requestId: 'r1' });
   const c = await b.call(ADMIN, 'addEvent', { name: 'Mixer', requestId: 'r1' });
   assert.equal(a.id, c.id);
@@ -61,14 +61,14 @@ test('creates are idempotent by requestId and attendance is desired-state', asyn
 });
 
 test('photos are generated local SVGs', async () => {
-  const b = createDemoBackend({ latencyMs: 0 });
+  const b = createDemoBackend({ latencyMs: 0, seed: demoSeed });
   const res = await b.call(VOTER, 'getPhotos', { ids: ['demo-photo-r-avery', 'not-linked'] });
   assert.deepEqual(Object.keys(res.photos), ['demo-photo-r-avery']);
   assert.match(res.photos['demo-photo-r-avery'], /^data:image\/svg\+xml/);
 });
 
 test('demo mirrors live: cascades delete votes, cleanup is staged and exact', async () => {
-  const b = createDemoBackend({ latencyMs: 0 });
+  const b = createDemoBackend({ latencyMs: 0, seed: demoSeed });
   // Seed has one stale vote for a missing event.
   const preview = await b.call(ADMIN, 'getVoteCleanup');
   assert.deepEqual(preview.byReason, { missingRecruit: 0, missingEvent: 1, notPresent: 0, invalidScore: 0 });
@@ -102,7 +102,7 @@ test('demo mirrors live: cascades delete votes, cleanup is staged and exact', as
 });
 
 test('demo addRecruit requires a valid graduation year like the server', async () => {
-  const b = createDemoBackend({ latencyMs: 0 });
+  const b = createDemoBackend({ latencyMs: 0, seed: demoSeed });
   const n = b.snapshot().recruits.length;
   for (const gradYear of [undefined, '', '  ', '27', 'abcd', '1999', '2101']) {
     await assert.rejects(() => b.call(ADMIN, 'addRecruit', { name: 'X', major: 'Finance (BSBA)', gradYear, photoDataBase64: 'AAAA' }), /Graduation year/, String(gradYear));
