@@ -1,58 +1,56 @@
-import { callApi } from './api.js';
+// Photo cache: memory only (never sessionStorage), bounded, and scoped to one
+// runtime + signed-in identity. Changing scope or signing out drops every
+// cached image, so a later session can never read an earlier one's photos.
 
+const MAX_ENTRIES = 150;
+export const PHOTO_BATCH = 20;
+
+let scope = '';
 const memory = new Map();
-const STORAGE_KEY = 'rt-recruit-photos';
-const BATCH = 20;
-let persistDisabled = false;
-let hydrated = false;
 
-function readStore() {
-  try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
+export function setPhotoScope(next) {
+  const key = String(next || '');
+  if (key === scope) return;
+  memory.clear();
+  scope = key;
 }
 
-function hydrate() {
-  if (hydrated) return;
-  hydrated = true;
-  const stored = readStore();
-  Object.keys(stored).forEach(key => {
-    if (!memory.has(key) && typeof stored[key] === 'string' && stored[key]) {
-      memory.set(key, stored[key]);
-    }
-  });
+export function photoScope() {
+  return scope;
 }
 
-function persist() {
-  if (persistDisabled) return;
-  try {
-    const all = {};
-    memory.forEach((value, key) => { all[key] = value; });
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(all));
-  } catch {
-    persistDisabled = true;
-  }
+export function clearPhotoCache() {
+  memory.clear();
+  scope = '';
+}
+
+export function photoCacheSize() {
+  return memory.size;
 }
 
 export function photoCacheGet(id) {
-  if (!id) return '';
-  hydrate();
-  return memory.get(String(id)) || '';
+  if (!id || !scope) return '';
+  const key = String(id);
+  const hit = memory.get(key);
+  if (!hit) return '';
+  memory.delete(key);
+  memory.set(key, hit);
+  return hit;
 }
 
 export function photoCacheSet(id, dataUrl) {
-  if (!id || !dataUrl) return;
-  hydrate();
-  memory.set(String(id), dataUrl);
-  persist();
+  if (!id || !dataUrl || !scope) return;
+  if (!/^data:image\//.test(dataUrl)) return;
+  const key = String(id);
+  memory.delete(key);
+  memory.set(key, dataUrl);
+  while (memory.size > MAX_ENTRIES) memory.delete(memory.keys().next().value);
 }
 
-export async function fetchPhotos(token, ids) {
+// load(ids) -> Promise<{ photos }>. Batches run in parallel (bounded by the
+// backend's 20-per-call limit) and a failed batch rejects so the UI can show
+// an optional-photo warning instead of silently showing initials forever.
+export async function fetchPhotos(load, ids) {
   const want = [];
   const seen = new Set();
   (ids || []).forEach(id => {
@@ -68,15 +66,18 @@ export async function fetchPhotos(token, ids) {
     if (hit) out[id] = hit;
     else missing.push(id);
   });
-  for (let i = 0; i < missing.length; i += BATCH) {
-    const chunk = missing.slice(i, i + BATCH);
-    const res = await callApi('getPhotos', token, { ids: chunk });
+  const startedScope = scope;
+  const chunks = [];
+  for (let i = 0; i < missing.length; i += PHOTO_BATCH) chunks.push(missing.slice(i, i + PHOTO_BATCH));
+  const results = await Promise.all(chunks.map(chunk => load(chunk)));
+  results.forEach(res => {
     const photos = res && res.photos ? res.photos : {};
     Object.keys(photos).forEach(id => {
       if (typeof photos[id] !== 'string' || !photos[id]) return;
-      photoCacheSet(id, photos[id]);
+      // Ignore responses that arrive after a sign-out or account switch.
+      if (scope === startedScope) photoCacheSet(id, photos[id]);
       out[id] = photos[id];
     });
-  }
-  return out;
+  });
+  return scope === startedScope ? out : {};
 }

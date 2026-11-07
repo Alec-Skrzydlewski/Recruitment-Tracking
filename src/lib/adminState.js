@@ -113,6 +113,61 @@ export function removeUser(users, email) {
   }
 }
 
+// Cascading deletes mirror the server: deleting a recruit removes its votes,
+// attendance and note; deleting an event removes its votes and attendance;
+// marking a recruit absent removes their votes at that event. The inverse
+// re-inserts exactly the removed rows at their original positions.
+const CASCADES = {
+  recruit: id => ({
+    recruits: r => String(r.id) === String(id),
+    votes: v => String(v.recruitId) === String(id),
+    attendance: a => String(a.recruitId) === String(id),
+    notes: n => String(n.recruitId) === String(id),
+  }),
+  event: id => ({
+    events: e => String(e.id) === String(id),
+    votes: v => String(v.eventId) === String(id),
+    attendance: a => String(a.eventId) === String(id),
+  }),
+  absent: (eventId, recruitId) => ({
+    attendance: a => String(a.eventId) === String(eventId) && String(a.recruitId) === String(recruitId),
+    votes: v => String(v.eventId) === String(eventId) && String(v.recruitId) === String(recruitId),
+  }),
+}
+
+export function cascadeRemove(data, preds) {
+  const next = { ...data }
+  const removed = {}
+  Object.keys(preds).forEach(collection => {
+    const src = data[collection] || []
+    const kept = []
+    const gone = []
+    src.forEach((item, index) => {
+      if (preds[collection](item)) gone.push({ index, item })
+      else kept.push(item)
+    })
+    next[collection] = kept
+    if (gone.length) removed[collection] = gone
+  })
+  return { data: next, removed }
+}
+
+export function restoreRows(data, removed) {
+  const next = { ...data }
+  Object.keys(removed || {}).forEach(collection => {
+    let list = (next[collection] || []).slice()
+    removed[collection].forEach(({ index, item }) => { list = insertAt(list, index, item) })
+    next[collection] = list
+  })
+  return next
+}
+
+export function cascadeFor(action) {
+  if (action.type === 'deleteRecruit') return CASCADES.recruit(action.id)
+  if (action.type === 'deleteEvent') return CASCADES.event(action.id)
+  return CASCADES.absent(action.eventId, action.recruitId)
+}
+
 export function createInflightGuard() {
   const keys = new Set()
   return {
@@ -161,6 +216,15 @@ export function apply(data, action) {
           ? { type: 'removeById', collection, id: action.item.id }
           : null,
       }
+    }
+    case 'deleteRecruit':
+    case 'deleteEvent':
+    case 'markAbsent': {
+      const { data: next, removed } = cascadeRemove(d, cascadeFor(action))
+      return { data: next, inverse: { type: 'restoreRows', removed } }
+    }
+    case 'restoreRows': {
+      return { data: restoreRows(d, action.removed), inverse: null }
     }
     case 'toggleAttendance': {
       return {

@@ -293,3 +293,43 @@ test('double-submit guard helper rejects a second begin before end', () => {
   assert.equal(isTempId(nextTempId()), true);
   assert.equal(isTempId('real-1'), false);
 });
+
+const CASCADE_DATA = () => ({
+  recruits: [{ id: 'r1' }, { id: 'r2' }],
+  events: [{ id: 'e1' }, { id: 'e2' }],
+  attendance: [{ eventId: 'e1', recruitId: 'r1' }, { eventId: 'e1', recruitId: 'r2' }, { eventId: 'e2', recruitId: 'r1' }],
+  votes: [
+    { eventId: 'e1', recruitId: 'r1', score: 7 }, { eventId: 'e1', recruitId: 'r2', score: 6 },
+    { eventId: 'e2', recruitId: 'r1', score: 9 },
+  ],
+  notes: [{ recruitId: 'r1', content: 'a' }, { recruitId: 'r2', content: 'b' }],
+  users: [{ email: 'u@x.test' }],
+});
+
+test('optimistic cascades mirror the server and roll back exactly', () => {
+  const cases = [
+    [{ type: 'deleteEvent', id: 'e1' }, d => {
+      assert.deepEqual(d.events.map(e => e.id), ['e2']);
+      assert.deepEqual(d.votes.map(v => v.eventId + v.recruitId), ['e2r1']);
+      assert.deepEqual(d.attendance.map(a => a.eventId + a.recruitId), ['e2r1']);
+      assert.equal(d.notes.length, 2);
+    }],
+    [{ type: 'deleteRecruit', id: 'r1' }, d => {
+      assert.deepEqual(d.recruits.map(r => r.id), ['r2']);
+      assert.deepEqual(d.votes.map(v => v.eventId + v.recruitId), ['e1r2']);
+      assert.deepEqual(d.attendance.map(a => a.eventId + a.recruitId), ['e1r2']);
+      assert.deepEqual(d.notes.map(n => n.recruitId), ['r2']);
+    }],
+    [{ type: 'markAbsent', eventId: 'e1', recruitId: 'r1' }, d => {
+      assert.deepEqual(d.votes.map(v => v.eventId + v.recruitId), ['e1r2', 'e2r1']);
+      assert.deepEqual(d.attendance.map(a => a.eventId + a.recruitId), ['e1r2', 'e2r1']);
+      assert.equal(d.recruits.length, 2);
+    }],
+  ];
+  for (const [action, check] of cases) {
+    const before = CASCADE_DATA();
+    const result = apply(before, action);
+    check(result.data);
+    assert.deepEqual(rollback(result.data, result.inverse), CASCADE_DATA(), action.type + ' rollback');
+  }
+});

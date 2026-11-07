@@ -1,119 +1,100 @@
-import { useState, useEffect, useRef } from 'react'
-import { callApi } from '../lib/api'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useRuntime } from '../runtime'
 import {
-  apply,
-  rollback,
-  replaceId,
-  replaceIdInMap,
-  nextTempId,
-  isTempId,
-  createInflightGuard,
+  apply, rollback, replaceId, replaceIdInMap, nextTempId, isTempId, createInflightGuard,
 } from '../lib/adminState'
-import {
-  MAJORS,
-  OTHER,
-  gradYears,
-  optionValue,
-} from '../lib/recruitOptions'
-import { preparePhoto } from '../lib/preparePhoto'
+import { buildTally } from '../lib/tally'
 import { photoCacheSet } from '../lib/photoCache'
 import { usePhotoMap } from '../lib/usePhotoMap'
-import RecruitAvatar from '../components/RecruitAvatar'
+import { Banner, ErrorState, LoadingState, errorText } from '../components/ui'
+import DashboardTab from './admin/DashboardTab'
+import RecruitsTab from './admin/RecruitsTab'
+import EventsTab from './admin/EventsTab'
+import UsersTab from './admin/UsersTab'
+import SettingsTab from './admin/SettingsTab'
 
-let adminAutoSync = null
-let adminAutoSyncToken = null
+const TABS = [
+  ['dashboard', 'Dashboard'],
+  ['recruits', 'Recruits'],
+  ['events', 'Events'],
+  ['users', 'Members'],
+  ['settings', 'Settings'],
+]
 
-function requestAutoSync(token) {
-  if (!adminAutoSync || adminAutoSyncToken !== token) {
-    adminAutoSyncToken = token
-    const job = callApi('syncPhotoFolder', token)
-    adminAutoSync = job
-    job.finally(() => {
-      if (adminAutoSync === job) adminAutoSync = null
-    })
-  }
-  return adminAutoSync
+function draftsFrom(d) {
+  const drafts = {}
+  ;(d.notes || []).forEach(n => { drafts[n.recruitId] = n.content || '' })
+  return drafts
 }
 
-function SavingPill() {
-  return <span className="badge badge-gray" style={{ marginLeft: 8 }}>Saving…</span>
+function requestId() {
+  return 'req-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)
 }
 
-function recruitSummary(recruit) {
-  const majors = [recruit.major, recruit.secondMajor].filter(Boolean).join(' / ')
-  return [majors, recruit.gradYear].filter(Boolean).join(' · ')
-}
-
-function recruitHasPhoto(recruit) {
-  if (!recruit) return false
-  return !!(String(recruit.photoFileId || '').trim() || String(recruit.photoSource || '').trim())
-}
-
-function MajorOptions() {
-  return (
-    <>
-      <optgroup label="Undergraduate">
-        {MAJORS.undergraduate.map(major => <option key={major} value={major}>{major}</option>)}
-      </optgroup>
-      <optgroup label="Graduate">
-        {MAJORS.graduate.map(major => <option key={major} value={major}>{major}</option>)}
-      </optgroup>
-      <option value={OTHER}>Other</option>
-    </>
-  )
-}
-
-function fieldLabelStyle() {
-  return { display: 'block', fontSize: 13, color: '#777', marginBottom: 4 }
-}
-
-export default function Admin({ token, me }) {
+export default function Admin() {
+  const runtime = useRuntime()
+  const { api, me, loadPhotos, mode } = runtime
   const [tab, setTab] = useState('dashboard')
   const [data, setData] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
+  const [attempt, setAttempt] = useState(0)
   const [error, setError] = useState(null)
-  const [newName, setNewName] = useState('')
-  const [majorChoice, setMajorChoice] = useState('')
-  const [majorCustom, setMajorCustom] = useState('')
-  const [secondChoice, setSecondChoice] = useState('')
-  const [secondCustom, setSecondCustom] = useState('')
-  const [gradYear, setGradYear] = useState('')
-  const [photoFile, setPhotoFile] = useState(null)
-  const [photoObjectUrl, setPhotoObjectUrl] = useState('')
-  const [recruitError, setRecruitError] = useState('')
-  const [unmatched, setUnmatched] = useState(null)
-  const [linkChoice, setLinkChoice] = useState({})
-  const [previews, setPreviews] = useState({})
-  const [newEvent, setNewEvent] = useState('')
-  const [newEmail, setNewEmail] = useState('')
-  const [noteDrafts, setNoteDrafts] = useState({})
+  const [notice, setNotice] = useState(null)
   const [saving, setSaving] = useState({})
+  const [noteDrafts, setNoteDrafts] = useState({})
+  const [savedNotes, setSavedNotes] = useState({})
+  const [noteStatus, setNoteStatus] = useState({})
+  const [previews, setPreviews] = useState({})
+  const [unmatched, setUnmatched] = useState(null)
+  const [photoWarning, setPhotoWarning] = useState(null)
 
   const dataRef = useRef(null)
+  // Fingerprint of the cycle data as last loaded from the server. The wipe
+  // sends it back; any change since (anyone's, including this admin's own
+  // edits) makes the server refuse, and the page reloads for review.
+  const fingerprintRef = useRef('')
   const inflight = useRef(createInflightGuard())
-  const photoInputRef = useRef(null)
-
-  useEffect(() => () => {
-    if (photoObjectUrl) URL.revokeObjectURL(photoObjectUrl)
-  }, [photoObjectUrl])
 
   function commit(next) {
     dataRef.current = next
     setData(next)
   }
 
-  function applyAction(action) {
-    const result = apply(dataRef.current, action)
-    commit(result.data)
-    return result.inverse
+  // Loading admin data never touches Drive. Photo folder sync is a separate,
+  // explicit action on the Recruits tab.
+  useEffect(() => {
+    let cancelled = false
+    setLoadError(null)
+    api('getAdminData').then(d => {
+      if (cancelled) return
+      fingerprintRef.current = d.cycleFingerprint || ''
+      commit(d)
+      const drafts = draftsFrom(d)
+      setNoteDrafts(drafts)
+      setSavedNotes(drafts)
+    }).catch(err => {
+      if (!cancelled) setLoadError(errorText(err))
+    })
+    return () => { cancelled = true }
+  }, [api, attempt])
+
+  const wiping = !!saving.wipe
+  const [cleanup, setCleanup] = useState(null)
+
+  async function reloadAll() {
+    const fresh = await api('getAdminData')
+    fingerprintRef.current = fresh.cycleFingerprint || ''
+    commit(fresh)
+    const drafts = draftsFrom(fresh)
+    setNoteDrafts(drafts)
+    setSavedNotes(drafts)
   }
 
-  function rollbackAction(inverse) {
-    if (!inverse || !dataRef.current) return
-    commit(rollback(dataRef.current, inverse))
-  }
-
+  // Wipe and invalid-vote cleanup are exclusive: they never overlap other writes.
+  const EXCLUSIVE = ['wipe', 'cleanup']
   function begin(key) {
+    if (EXCLUSIVE.some(k => k !== key && inflight.current.has(k))) return false
+    if (EXCLUSIVE.includes(key) && Object.keys(saving).length) return false
     if (!inflight.current.begin(key)) return false
     setSaving(s => ({ ...s, [key]: true }))
     return true
@@ -130,750 +111,307 @@ export default function Admin({ token, me }) {
   }
 
   function fail(err) {
-    setError(err && err.message ? err.message : String(err))
+    setError(errorText(err))
   }
 
-  function applySyncResult(res) {
-    if (!res || res.error) return
-    const linked = res.linked || []
-    if (linked.length && dataRef.current) {
-      const byId = {}
-      linked.forEach(item => { byId[String(item.recruitId)] = item })
-      const next = {
-        ...dataRef.current,
-        recruits: (dataRef.current.recruits || []).map(r => {
-          const hit = byId[String(r.id)]
-          if (!hit || recruitHasPhoto(r)) return r
-          return { ...r, photoFileId: hit.fileId, photoSource: 'folder' }
-        }),
-      }
-      commit(next)
-    }
-    setUnmatched(res.unmatched || [])
-  }
-
-  function clearSyncFlag() {
-    setSaving(s => {
-      if (!s['sync-photos']) return s
-      const next = { ...s }
-      delete next['sync-photos']
-      return next
-    })
-  }
-
-  async function onSync() {
-    if (!begin('sync-photos')) return
+  async function optimistic(key, action, call) {
+    if (!begin(key)) return false
+    const result = apply(dataRef.current, action)
+    commit(result.data)
     try {
-      const res = await callApi('syncPhotoFolder', token)
-      applySyncResult(res)
+      await call()
+      return true
     } catch (err) {
+      if (result.inverse && dataRef.current) commit(rollback(dataRef.current, result.inverse))
       fail(err)
+      return false
     } finally {
-      end('sync-photos')
+      end(key)
     }
   }
 
-  useEffect(() => {
-    let cancelled = false
-    callApi('getAdminData', token)
-      .then(d => {
-        if (cancelled) return
-        dataRef.current = d
-        setData(d)
-        const drafts = {}
-        ;(d.notes || []).forEach(n => { drafts[n.recruitId] = n.content || '' })
-        setNoteDrafts(drafts)
-        setLoading(false)
-        if (!inflight.current.begin('sync-photos')) return
-        setSaving(s => ({ ...s, 'sync-photos': true }))
-        requestAutoSync(token).then(res => {
-          if (!cancelled) applySyncResult(res)
-        }).catch(err => {
-          if (!cancelled) fail(err)
-        }).finally(() => {
-          if (cancelled) return
-          inflight.current.end('sync-photos')
-          clearSyncFlag()
-        })
-      })
-      .catch(err => {
-        if (cancelled) return
-        fail(err)
-        setLoading(false)
-      })
-    return () => { cancelled = true }
-  }, [token])
-
-  function onPhotoPick(e) {
-    const file = e.target.files && e.target.files[0]
-    setRecruitError('')
-    setPhotoFile(file || null)
-    setPhotoObjectUrl(current => {
-      if (current) URL.revokeObjectURL(current)
-      return file ? URL.createObjectURL(file) : ''
-    })
-  }
-
-  function clearPhotoPick() {
-    setPhotoFile(null)
-    setPhotoObjectUrl('')
-    if (photoInputRef.current) photoInputRef.current.value = ''
-  }
-
-  function dropPreview(id) {
-    setPreviews(prev => {
-      if (!prev[id]) return prev
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
-  }
-
-  async function addRecruit(e) {
-    e.preventDefault()
-    const name = newName.trim()
-    const major = optionValue(majorChoice, majorCustom)
-    const secondMajor = optionValue(secondChoice, secondCustom)
-    const grad = gradYear.trim()
-    if (!name) return
-    if (!major) {
-      setRecruitError('Major is required.')
-      return
-    }
-    if (secondMajor && secondMajor.toLowerCase() === major.toLowerCase()) {
-      setRecruitError('Second major must be different from the major.')
-      return
-    }
-    if (!begin('add-recruit')) return
-    setRecruitError('')
-    let prepared = null
-    try {
-      if (photoFile) prepared = await preparePhoto(photoFile)
-    } catch (err) {
-      end('add-recruit')
-      setRecruitError(err && err.message ? err.message : 'Could not read that image')
-      return
-    }
-    setNewName('')
-    setMajorChoice('')
-    setMajorCustom('')
-    setSecondChoice('')
-    setSecondCustom('')
-    setGradYear('')
-    clearPhotoPick()
-    const tempId = nextTempId()
-    const preview = prepared ? 'data:image/jpeg;base64,' + prepared.dataBase64 : ''
-    if (preview) setPreviews(prev => ({ ...prev, [tempId]: preview }))
-    const item = { name, major, secondMajor, gradYear: grad, photoFileId: '', photoSource: '' }
-    const inverse = applyAction({
-      type: 'addTemp',
-      collection: 'recruits',
-      tempId,
-      item,
-    })
-    try {
-      const payload = { name, major, secondMajor, gradYear: grad }
-      if (prepared) {
-        payload.photoDataBase64 = prepared.dataBase64
-        payload.photoMimeType = prepared.mimeType
-      }
-      const res = await callApi('addRecruit', token, payload)
-      const realId = res && res.id
-      if (realId && dataRef.current) {
-        let next = replaceId(dataRef.current, tempId, realId)
-        if (res.photoFileId) {
-          if (preview) photoCacheSet(res.photoFileId, preview)
-          next = {
-            ...next,
-            recruits: next.recruits.map(r => (
-              r.id === realId ? { ...r, photoFileId: res.photoFileId, photoSource: 'upload' } : r
-            )),
-          }
+  const ctl = {
+    mode, me, saving, wiping, isTempId,
+    async addRecruit(fields, prepared) {
+      if (!begin('add-recruit')) return false
+      const tempId = nextTempId()
+      const preview = prepared ? 'data:image/jpeg;base64,' + prepared.dataBase64 : ''
+      if (preview) setPreviews(p => ({ ...p, [tempId]: preview }))
+      const result = apply(dataRef.current, { type: 'addTemp', collection: 'recruits', tempId, item: { ...fields, photoFileId: '', photoSource: '' } })
+      commit(result.data)
+      try {
+        const payload = { ...fields, requestId: requestId() }
+        if (prepared) {
+          payload.photoDataBase64 = prepared.dataBase64
+          payload.photoMimeType = prepared.mimeType
         }
-        commit(next)
-        setNoteDrafts(d => replaceIdInMap(d, tempId, realId))
+        const res = await api('addRecruit', payload)
+        if (res && res.id && dataRef.current) {
+          let next = replaceId(dataRef.current, tempId, res.id)
+          if (res.photoFileId) {
+            if (preview) photoCacheSet(res.photoFileId, preview)
+            next = { ...next, recruits: next.recruits.map(r => (r.id === res.id ? { ...r, photoFileId: res.photoFileId, photoSource: 'upload' } : r)) }
+          }
+          commit(next)
+          setNoteDrafts(d => replaceIdInMap(d, tempId, res.id))
+        }
+        return true
+      } catch (err) {
+        if (dataRef.current) commit(rollback(dataRef.current, result.inverse))
+        fail(err)
+        return false
+      } finally {
+        setPreviews(p => { const n = { ...p }; delete n[tempId]; return n })
+        end('add-recruit')
       }
-      dropPreview(tempId)
-    } catch (err) {
-      rollbackAction(inverse)
-      dropPreview(tempId)
-      fail(err)
-    } finally {
-      end('add-recruit')
-    }
-  }
-
-  async function onUploadPhoto(recruitId, file, input) {
-    if (!file) return
-    const key = 'photo:' + recruitId
-    if (!begin(key)) return
-    try {
-      const prepared = await preparePhoto(file)
-      const res = await callApi('uploadPhoto', token, {
-        recruitId,
-        dataBase64: prepared.dataBase64,
-        mimeType: prepared.mimeType,
-      })
-      const dataUrl = 'data:image/jpeg;base64,' + prepared.dataBase64
-      if (res && res.photoFileId) photoCacheSet(res.photoFileId, dataUrl)
-      if (dataRef.current && res && res.photoFileId) {
-        commit({
-          ...dataRef.current,
-          recruits: dataRef.current.recruits.map(r => (
-            String(r.id) === String(recruitId)
-              ? { ...r, photoFileId: res.photoFileId, photoSource: 'upload' }
-              : r
-          )),
+    },
+    deleteRecruit(r) {
+      if (isTempId(r.id)) return
+      const votes = (dataRef.current.votes || []).filter(v => String(v.recruitId) === String(r.id)).length
+      if (!confirm(`Remove ${r.name}? This permanently deletes ${votes} vote${votes === 1 ? '' : 's'} for them, their attendance and their note. Their Drive photo file is kept. This cannot be undone.`)) return
+      optimistic(`del-recruit:${r.id}`, { type: 'deleteRecruit', id: r.id }, () => api('deleteRecruit', { id: r.id }))
+    },
+    async uploadPhoto(recruitId, prepared) {
+      const key = 'photo:' + recruitId
+      if (!begin(key)) return
+      try {
+        const res = await api('uploadPhoto', { recruitId, dataBase64: prepared.dataBase64, mimeType: prepared.mimeType })
+        if (res && res.photoFileId) {
+          photoCacheSet(res.photoFileId, 'data:image/jpeg;base64,' + prepared.dataBase64)
+          commit({ ...dataRef.current, recruits: dataRef.current.recruits.map(r => (String(r.id) === String(recruitId) ? { ...r, photoFileId: res.photoFileId, photoSource: 'upload' } : r)) })
+        }
+      } catch (err) {
+        if (err && err.code === 'PHOTO_UNAVAILABLE') setPhotoWarning(errorText(err))
+        else fail(err)
+      } finally {
+        end(key)
+      }
+    },
+    async syncPhotos() {
+      if (!begin('sync-photos')) return
+      setPhotoWarning(null)
+      try {
+        const res = await api('syncPhotoFolder')
+        const linked = (res && res.linked) || []
+        if (linked.length && dataRef.current) {
+          const byId = {}
+          linked.forEach(item => { byId[String(item.recruitId)] = item })
+          commit({ ...dataRef.current, recruits: dataRef.current.recruits.map(r => {
+            const hit = byId[String(r.id)]
+            return hit && !r.photoFileId ? { ...r, photoFileId: hit.fileId, photoSource: 'folder' } : r
+          }) })
+        }
+        setUnmatched((res && res.unmatched) || [])
+        setNotice(linked.length ? `Linked ${linked.length} photo${linked.length === 1 ? '' : 's'} from the folder.` : 'Photo folder checked. Nothing new to link automatically.')
+      } catch (err) {
+        setPhotoWarning(errorText(err))
+      } finally {
+        end('sync-photos')
+      }
+    },
+    async linkPhoto(fileId, recruitId) {
+      const key = 'link:' + fileId
+      if (!fileId || !recruitId || !begin(key)) return
+      try {
+        await api('linkPhoto', { fileId, recruitId })
+        commit({ ...dataRef.current, recruits: dataRef.current.recruits.map(r => (String(r.id) === String(recruitId) ? { ...r, photoFileId: fileId, photoSource: 'folder' } : r)) })
+        setUnmatched(list => (list || []).filter(item => item.fileId !== fileId))
+      } catch (err) {
+        fail(err)
+      } finally {
+        end(key)
+      }
+    },
+    async addEvent(name) {
+      if (!begin('add-event')) return false
+      const tempId = nextTempId()
+      const result = apply(dataRef.current, { type: 'addTemp', collection: 'events', tempId, item: { name } })
+      commit(result.data)
+      try {
+        const res = await api('addEvent', { name, requestId: requestId() })
+        if (res && res.id && dataRef.current) commit(replaceId(dataRef.current, tempId, res.id))
+        return true
+      } catch (err) {
+        if (dataRef.current) commit(rollback(dataRef.current, result.inverse))
+        fail(err)
+        return false
+      } finally {
+        end('add-event')
+      }
+    },
+    deleteEvent(ev) {
+      if (isTempId(ev.id)) return
+      const votes = (dataRef.current.votes || []).filter(v => String(v.eventId) === String(ev.id)).length
+      if (!confirm(`Delete ${ev.name}? This permanently deletes ${votes} vote${votes === 1 ? '' : 's'} cast at this event and its attendance list. This cannot be undone.`)) return
+      optimistic(`del-event:${ev.id}`, { type: 'deleteEvent', id: ev.id }, () => api('deleteEvent', { id: ev.id }))
+    },
+    setAttendance(eventId, recruitId, present) {
+      if (isTempId(eventId) || isTempId(recruitId)) return
+      if (present) {
+        optimistic(`att:${eventId}:${recruitId}`, { type: 'toggleAttendance', eventId, recruitId }, () => api('setAttendance', { eventId, recruitId, present }))
+        return
+      }
+      const votes = (dataRef.current.votes || []).filter(v => String(v.eventId) === String(eventId) && String(v.recruitId) === String(recruitId)).length
+      if (votes && !confirm(`Mark absent? This permanently deletes ${votes} vote${votes === 1 ? '' : 's'} for this recruit at this event. This cannot be undone.`)) return
+      optimistic(`att:${eventId}:${recruitId}`, { type: 'markAbsent', eventId, recruitId }, () => api('setAttendance', { eventId, recruitId, present }))
+    },
+    noteDrafts, savedNotes, noteStatus,
+    editNote(recruitId, value) {
+      setNoteDrafts(d => ({ ...d, [recruitId]: value }))
+      setNoteStatus(s => ({ ...s, [recruitId]: null }))
+    },
+    async saveNote(recruitId) {
+      const key = 'note:' + recruitId
+      if (isTempId(recruitId) || !begin(key)) return
+      const content = noteDrafts[recruitId] || ''
+      setNoteStatus(s => ({ ...s, [recruitId]: 'saving' }))
+      try {
+        await api('saveNote', { recruitId, content })
+        setSavedNotes(s => ({ ...s, [recruitId]: content }))
+        setNoteStatus(s => ({ ...s, [recruitId]: 'saved' }))
+      } catch (err) {
+        // The draft stays in the textarea so nothing typed is lost.
+        setNoteStatus(s => ({ ...s, [recruitId]: 'error:' + errorText(err) }))
+      } finally {
+        end(key)
+      }
+    },
+    addUser(email, name) {
+      return optimistic('add-user', { type: 'addUser', email, name: name || email, role: 'brother' }, () => api('manageUser', { op: 'add', email, name, role: 'brother' }))
+    },
+    setRole(email, role) {
+      optimistic(`role:${email}`, { type: 'setUserRole', email, role }, () => api('manageUser', { op: 'setRole', email, role }))
+    },
+    removeUser(email) {
+      if (!confirm('Remove ' + email + ' from the member list?')) return
+      optimistic(`user-remove:${email}`, { type: 'removeUser', email }, () => api('manageUser', { op: 'remove', email }))
+    },
+    async wipe(confirmText) {
+      if (!begin('wipe')) {
+        setError('Finish the changes that are still saving, then try again.')
+        return false
+      }
+      const reload = reloadAll
+      try {
+        await api('wipeCycle', { confirm: confirmText, expectedFingerprint: fingerprintRef.current })
+        await reload()
+        setUnmatched(null)
+        setNotice('Cycle wiped. Members were kept.')
+        return true
+      } catch (err) {
+        if (err && err.code === 'CONFLICT') {
+          try {
+            await reload()
+            setError('Cycle data changed since this page loaded (including any edits you made). Nothing was wiped. The latest data is now shown; review it and confirm again.')
+          } catch (reloadErr) {
+            fail(reloadErr)
+          }
+          return false
+        }
+        fail(err)
+        return false
+      } finally {
+        end('wipe')
+      }
+    },
+    cleanup,
+    // Read-only: asks the server which stored votes are invalid. Never writes.
+    async previewCleanup() {
+      try {
+        setCleanup(await api('getVoteCleanup'))
+      } catch (err) {
+        fail(err)
+      }
+    },
+    async runCleanup() {
+      const preview = cleanup
+      if (!preview || !preview.count) return false
+      if (!begin('cleanup')) {
+        setError('Finish the changes that are still saving, then try again.')
+        return false
+      }
+      try {
+        const res = await api('cleanupInvalidVotes', {
+          confirm: 'DELETE INVALID VOTES', expectedFingerprint: preview.cycleFingerprint, expectedCount: preview.count,
         })
+        await reloadAll()
+        setCleanup(null)
+        setNotice(`Permanently deleted ${res.deleted} invalid vote${res.deleted === 1 ? '' : 's'}.`)
+        return true
+      } catch (err) {
+        if (err && err.code === 'CONFLICT') {
+          setCleanup(null)
+          setError('Vote data changed since the check. Nothing was deleted. Check again.')
+        } else {
+          fail(err)
+        }
+        return false
+      } finally {
+        end('cleanup')
       }
-    } catch (err) {
-      fail(err)
-    } finally {
-      if (input) input.value = ''
-      end(key)
-    }
+    },
+    unmatched, photoWarning,
   }
 
-  async function onLinkPhoto(fileId, recruitId) {
-    if (!fileId || !recruitId) return
-    const key = 'link:' + fileId
-    if (!begin(key)) return
-    try {
-      await callApi('linkPhoto', token, { fileId, recruitId })
-      if (dataRef.current) {
-        commit({
-          ...dataRef.current,
-          recruits: dataRef.current.recruits.map(r => (
-            String(r.id) === String(recruitId)
-              ? { ...r, photoFileId: fileId, photoSource: 'folder' }
-              : r
-          )),
-        })
-      }
-      setUnmatched(list => (list || []).filter(item => item.fileId !== fileId))
-      setLinkChoice(d => {
-        const next = { ...d }
-        delete next[fileId]
-        return next
-      })
-    } catch (err) {
-      fail(err)
-    } finally {
-      end(key)
-    }
-  }
+  const tally = useMemo(() => buildTally(data), [data])
 
-  async function addEvent(e) {
-    e.preventDefault()
-    const name = newEvent.trim()
-    if (!name) return
-    if (!begin('add-event')) return
-    setNewEvent('')
-    const tempId = nextTempId()
-    const inverse = applyAction({
-      type: 'addTemp',
-      collection: 'events',
-      tempId,
-      item: { name },
-    })
-    try {
-      const res = await callApi('addEvent', token, { name })
-      const realId = res && res.id
-      if (realId && dataRef.current) {
-        commit(replaceId(dataRef.current, tempId, realId))
-      }
-    } catch (err) {
-      rollbackAction(inverse)
-      fail(err)
-    } finally {
-      end('add-event')
-    }
-  }
+  const photoIds = useMemo(() => {
+    const ids = []
+    ;((data && data.recruits) || []).forEach(r => { if (r.photoFileId) ids.push(r.photoFileId) })
+    ;(unmatched || []).forEach(item => { if (item.fileId) ids.push(item.fileId) })
+    return ids
+  }, [data, unmatched])
+  const { photos, failed: photosFailed, retry: retryPhotos } = usePhotoMap(loadPhotos, photoIds)
+  ctl.photoFor = recruit => (recruit.photoFileId && photos[recruit.photoFileId]) || previews[recruit.id] || ''
+  ctl.photos = photos
 
-  async function addUser(e) {
-    e.preventDefault()
-    const email = newEmail.trim()
-    if (!email) return
-    if (!begin('add-user')) return
-    setNewEmail('')
-    const inverse = applyAction({ type: 'addUser', email })
-    try {
-      await callApi('manageUser', token, { op: 'add', email, role: 'brother' })
-    } catch (err) {
-      rollbackAction(inverse)
-      fail(err)
-    } finally {
-      end('add-user')
-    }
-  }
-
-  async function onDeleteRecruit(id) {
-    if (isTempId(id)) return
-    const key = `del-recruit:${id}`
-    if (!begin(key)) return
-    const inverse = applyAction({ type: 'removeById', collection: 'recruits', id })
-    try {
-      await callApi('deleteRecruit', token, { id })
-    } catch (err) {
-      rollbackAction(inverse)
-      fail(err)
-    } finally {
-      end(key)
-    }
-  }
-
-  async function onDeleteEvent(id) {
-    if (isTempId(id)) return
-    const key = `del-event:${id}`
-    if (!begin(key)) return
-    const inverse = applyAction({ type: 'removeById', collection: 'events', id })
-    try {
-      await callApi('deleteEvent', token, { id })
-    } catch (err) {
-      rollbackAction(inverse)
-      fail(err)
-    } finally {
-      end(key)
-    }
-  }
-
-  async function onToggleAttendance(eventId, recruitId) {
-    if (isTempId(eventId) || isTempId(recruitId)) return
-    const key = `att:${eventId}:${recruitId}`
-    if (!begin(key)) return
-    const inverse = applyAction({ type: 'toggleAttendance', eventId, recruitId })
-    try {
-      await callApi('toggleAttendance', token, { eventId, recruitId })
-    } catch (err) {
-      rollbackAction(inverse)
-      fail(err)
-    } finally {
-      end(key)
-    }
-  }
-
-  async function onMakeAdmin(email) {
-    const key = `role:${email}`
-    if (!begin(key)) return
-    const inverse = applyAction({ type: 'setUserRole', email, role: 'admin' })
-    try {
-      await callApi('manageUser', token, { op: 'setRole', email, role: 'admin' })
-    } catch (err) {
-      rollbackAction(inverse)
-      fail(err)
-    } finally {
-      end(key)
-    }
-  }
-
-  async function onRemoveUser(email) {
-    if (!confirm('Remove ' + email + '?')) return
-    const key = `user-remove:${email}`
-    if (!begin(key)) return
-    const inverse = applyAction({ type: 'removeUser', email })
-    try {
-      await callApi('manageUser', token, { op: 'remove', email })
-    } catch (err) {
-      rollbackAction(inverse)
-      fail(err)
-    } finally {
-      end(key)
-    }
-  }
-
-  async function saveNote(recruitId) {
-    if (isTempId(recruitId)) return
-    await callApi('saveNote', token, { recruitId, content: noteDrafts[recruitId] || '' })
-    alert('Note saved')
-  }
-
-  async function wipe() {
-    if (!confirm('Wipe all recruits, events, votes, and notes for this cycle? Users will be kept.')) return
-    if (!begin('wipe')) return
-    try {
-      await callApi('wipeCycle', token)
-      const d = await callApi('getAdminData', token)
-      dataRef.current = d
-      setData(d)
-      const drafts = {}
-      ;(d.notes || []).forEach(n => { drafts[n.recruitId] = n.content || '' })
-      setNoteDrafts(drafts)
-      setUnmatched(null)
-      alert('Cycle wiped.')
-    } catch (err) {
-      fail(err)
-    } finally {
-      end('wipe')
-    }
-  }
-
-  const errorBanner = error ? (
-    <div role="alert" style={{
-      background: '#fde8e8',
-      color: '#b83232',
-      padding: '10px 12px',
-      borderRadius: 8,
-      marginBottom: 16,
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      gap: 12,
-      fontSize: 13,
-    }}>
-      <span>{error}</span>
-      <button
-        type="button"
-        onClick={() => setError(null)}
-        style={{ background: 'none', border: 'none', color: '#b83232', fontSize: 18, padding: '0 4px' }}
-        aria-label="Dismiss error"
-      >×</button>
-    </div>
-  ) : null
-
-  const photoIds = []
-  ;(data && data.recruits || []).forEach(r => { if (r.photoFileId) photoIds.push(r.photoFileId) })
-  ;(unmatched || []).forEach(item => { if (item.fileId) photoIds.push(item.fileId) })
-  const photos = usePhotoMap(token, photoIds)
-  const years = gradYears()
-
-  function photoFor(recruit) {
-    return (recruit.photoFileId && photos[recruit.photoFileId]) || previews[recruit.id] || ''
-  }
-
-  if (!data) {
-    if (error && !loading) return <div style={{ padding: '2rem', maxWidth: 800, margin: '0 auto' }}>{errorBanner}</div>
-    return <div style={{ padding: '2rem' }}>Loading...</div>
-  }
-
-  const scoreFor = (recruitId) => {
-    const vs = data.votes.filter(v => v.recruitId === recruitId)
-    if (!vs.length) return null
-    return (vs.reduce((s, v) => s + Number(v.score), 0) / vs.length).toFixed(1)
-  }
-
-  const deletingRecruits = Object.keys(saving).some(k => k.startsWith('del-recruit:'))
-  const deletingEvents = Object.keys(saving).some(k => k.startsWith('del-event:'))
-  const removingUsers = Object.keys(saving).some(k => k.startsWith('user-remove:'))
+  if (loadError) return <ErrorState title="Couldn't load admin data" message={loadError} onRetry={() => setAttempt(n => n + 1)} />
+  if (!data) return <LoadingState label="Loading admin data…" />
 
   return (
-    <div style={{ maxWidth: 800, margin: '0 auto', padding: '1.5rem 1rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h1 style={{ fontSize: 20 }}>Admin</h1>
+    <div className="page">
+      <div className="page-head">
         <div>
-          <button onClick={wipe} disabled={!!saving.wipe} style={{ marginRight: 12, fontSize: 13, color: '#b83232' }}>
-            Wipe Cycle
-          </button>
-          {saving.wipe && <SavingPill />}
-          <button onClick={() => { localStorage.removeItem('google_token'); location.reload() }} style={{ fontSize: 13, color: '#aaa', background: 'none', border: 'none' }}>
-            Sign out
-          </button>
+          <div className="eyebrow">Admin</div>
+          <h1>Recruitment overview</h1>
         </div>
+        {Object.keys(saving).length > 0 && <span className="badge" role="status">Saving changes…</span>}
       </div>
 
-      {errorBanner}
+      {error && <Banner onDismiss={() => setError(null)}>{error}</Banner>}
+      {notice && <Banner kind="info" onDismiss={() => setNotice(null)}>{notice}</Banner>}
+      {(photoWarning || photosFailed) && (
+        <Banner
+          kind="warn"
+          onDismiss={photoWarning ? () => setPhotoWarning(null) : undefined}
+          action={photosFailed ? <button type="button" className="btn-sm" onClick={retryPhotos}>Retry photos</button> : null}
+        >
+          {photoWarning || "Some photos couldn't load. Initials are shown instead; everything else works."}
+        </Banner>
+      )}
 
-      <div style={{ display: 'flex', borderBottom: '1px solid #e8e8e5', marginBottom: 20 }}>
-        {['dashboard', 'recruits', 'events', 'users'].map(t => (
-          <button key={t} onClick={() => setTab(t)} style={{
-            background: 'none', border: 'none',
-            borderBottom: tab === t ? '2px solid #1a1a1a' : '2px solid transparent',
-            padding: '8px 16px', fontWeight: tab === t ? 500 : 400,
-            color: tab === t ? '#1a1a1a' : '#999',
-          }}>{t.charAt(0).toUpperCase() + t.slice(1)}</button>
+      <div className="tabs" role="tablist" aria-label="Admin sections">
+        {TABS.map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            id={'tab-' + id}
+            aria-selected={tab === id}
+            aria-controls={'panel-' + id}
+            className="tab"
+            onClick={() => setTab(id)}
+          >{label}</button>
         ))}
       </div>
 
-      {tab === 'dashboard' && (
-        <div>
-          {data.recruits.length === 0 ? <div className="card"><p style={{ color: '#888' }}>No recruits yet.</p></div> :
-            data.recruits.map(r => (
-              <div key={r.id} className="card" style={{ marginBottom: 12 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
-                  <div style={{ display: 'flex', gap: 12, minWidth: 0 }}>
-                    <RecruitAvatar name={r.name} src={photoFor(r)} />
-                    <div style={{ minWidth: 0 }}>
-                      <strong>{r.name}</strong>
-                      {isTempId(r.id) && <SavingPill />}
-                      {recruitSummary(r) && (
-                        <div style={{ color: '#999', fontSize: 13, fontWeight: 400 }}>{recruitSummary(r)}</div>
-                      )}
-                    </div>
-                  </div>
-                  <div style={{ fontSize: 18, fontWeight: 500 }}>{scoreFor(r.id) ?? '—'}</div>
-                </div>
-                <div style={{ fontSize: 12, color: '#aaa', marginBottom: 8 }}>
-                  {data.votes.filter(v => v.recruitId === r.id).length} votes
-                </div>
-                <textarea
-                  value={noteDrafts[r.id] || ''}
-                  onChange={e => setNoteDrafts(d => ({ ...d, [r.id]: e.target.value }))}
-                  placeholder="Notes about this recruit..."
-                  rows={3}
-                  style={{ width: '100%', marginBottom: 8, fontSize: 13 }}
-                />
-                <button onClick={() => saveNote(r.id)} disabled={isTempId(r.id)} className="btn-primary" style={{ fontSize: 13, padding: '6px 12px' }}>Save note</button>
-              </div>
-            ))}
-        </div>
-      )}
-
-      {tab === 'recruits' && (
-        <div>
-          <form onSubmit={addRecruit} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
-            <label>
-              <span style={fieldLabelStyle()}>Name</span>
-              <input value={newName} onChange={e => { setRecruitError(''); setNewName(e.target.value) }} placeholder="Name" required autoComplete="name" />
-            </label>
-            <label>
-              <span style={fieldLabelStyle()}>Major</span>
-              <select value={majorChoice} onChange={e => { setRecruitError(''); setMajorChoice(e.target.value) }} required>
-                <option value="">Select major</option>
-                <MajorOptions />
-              </select>
-            </label>
-            {majorChoice === OTHER && (
-              <input
-                value={majorCustom}
-                onChange={e => { setRecruitError(''); setMajorCustom(e.target.value) }}
-                placeholder="Type major"
-                aria-label="Other major"
-                required
-                autoComplete="off"
-              />
-            )}
-            <label>
-              <span style={fieldLabelStyle()}>Second major</span>
-              <select value={secondChoice} onChange={e => { setRecruitError(''); setSecondChoice(e.target.value) }}>
-                <option value="">None</option>
-                <MajorOptions />
-              </select>
-            </label>
-            {secondChoice === OTHER && (
-              <input
-                value={secondCustom}
-                onChange={e => { setRecruitError(''); setSecondCustom(e.target.value) }}
-                placeholder="Type second major"
-                aria-label="Other second major"
-                autoComplete="off"
-              />
-            )}
-            <label>
-              <span style={fieldLabelStyle()}>Graduation year</span>
-              <select value={gradYear} onChange={e => { setRecruitError(''); setGradYear(e.target.value) }}>
-                <option value="">Graduation year (optional)</option>
-                {years.map(year => <option key={year} value={String(year)}>{year}</option>)}
-              </select>
-            </label>
-            <label>
-              <span style={fieldLabelStyle()}>Photo</span>
-              <input
-                ref={photoInputRef}
-                type="file"
-                accept="image/*"
-                onChange={onPhotoPick}
-              />
-            </label>
-            {photoObjectUrl && (
-              <img src={photoObjectUrl} alt="" className="avatar" style={{ width: 64, height: 64 }} />
-            )}
-            {recruitError && (
-              <div role="alert" style={{ color: '#b83232', fontSize: 13 }}>{recruitError}</div>
-            )}
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <button type="submit" className="btn-primary" disabled={!!saving['add-recruit']}>Add</button>
-              {saving['add-recruit'] && <SavingPill />}
-            </div>
-          </form>
-          {deletingRecruits && <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>Saving…</div>}
-          {data.recruits.map(r => (
-            <div key={r.id} className="card" style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-              <span style={{ flex: 1, minWidth: 0, display: 'flex', gap: 12, alignItems: 'center' }}>
-                <RecruitAvatar name={r.name} src={photoFor(r)} />
-                <span style={{ flex: 1, minWidth: 0 }}>
-                  <div>
-                    {r.name}
-                    {isTempId(r.id) && <SavingPill />}
-                  </div>
-                  {recruitSummary(r) && (
-                    <div style={{ color: '#999', fontSize: 13 }}>{recruitSummary(r)}</div>
-                  )}
-                  {!recruitHasPhoto(r) && !isTempId(r.id) && (
-                    <label style={{ display: 'block', marginTop: 6, fontSize: 12, color: '#777' }}>
-                      Add photo
-                      <input
-                        type="file"
-                        accept="image/*"
-                        style={{ marginTop: 4 }}
-                        disabled={!!saving['photo:' + r.id]}
-                        onChange={e => onUploadPhoto(r.id, e.target.files && e.target.files[0], e.target)}
-                      />
-                    </label>
-                  )}
-                  {saving['photo:' + r.id] && <SavingPill />}
-                </span>
-              </span>
-              <button
-                onClick={() => onDeleteRecruit(r.id)}
-                disabled={isTempId(r.id)}
-                style={{ color: '#ccc', background: 'none', border: 'none', fontSize: 18 }}
-              >×</button>
-            </div>
-          ))}
-
-          <div style={{ marginTop: 20 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-              <button type="button" onClick={onSync} disabled={!!saving['sync-photos']}>Sync photo folder</button>
-              {saving['sync-photos'] && <SavingPill />}
-            </div>
-            <h2 style={{ fontSize: 16, fontWeight: 500, margin: '8px 0' }}>Unmatched photos</h2>
-            {unmatched == null ? (
-              <p style={{ color: '#888', fontSize: 13 }}>Checking the photo folder…</p>
-            ) : unmatched.length === 0 ? (
-              <p style={{ color: '#888', fontSize: 13 }}>No unmatched photos.</p>
-            ) : unmatched.map(item => (
-              <div key={item.fileId} className="card" style={{ marginBottom: 8 }}>
-                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-                  {photos[item.fileId] ? (
-                    <img src={photos[item.fileId]} alt="" className="avatar" style={{ width: 64, height: 64, borderRadius: 8 }} />
-                  ) : (
-                    <span className="avatar" style={{ width: 64, height: 64, borderRadius: 8 }} aria-hidden="true">…</span>
-                  )}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 500, marginBottom: 8 }}>{item.fileName}</div>
-                    {(item.suggestions || []).length > 0 && (
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
-                        {item.suggestions.map(suggestion => {
-                          const recruit = data.recruits.find(r => String(r.id) === String(suggestion.recruitId))
-                          const blocked = recruitHasPhoto(recruit)
-                          return (
-                            <button
-                              key={suggestion.recruitId}
-                              type="button"
-                              disabled={blocked || !!saving['link:' + item.fileId]}
-                              onClick={() => onLinkPhoto(item.fileId, suggestion.recruitId)}
-                            >
-                              {suggestion.name} ({Number(suggestion.score).toFixed(2)})
-                            </button>
-                          )
-                        })}
-                      </div>
-                    )}
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <select
-                        aria-label={'Link ' + item.fileName}
-                        value={linkChoice[item.fileId] || ''}
-                        onChange={e => setLinkChoice(d => ({ ...d, [item.fileId]: e.target.value }))}
-                        style={{ flex: 1, minWidth: 160 }}
-                      >
-                        <option value="">Link to recruit…</option>
-                        {data.recruits.map(r => (
-                          <option key={r.id} value={r.id} disabled={recruitHasPhoto(r) || isTempId(r.id)}>
-                            {r.name}{recruitHasPhoto(r) ? ' (has photo)' : ''}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        disabled={!linkChoice[item.fileId] || !!saving['link:' + item.fileId]}
-                        onClick={() => onLinkPhoto(item.fileId, linkChoice[item.fileId])}
-                      >Link</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {tab === 'events' && (
-        <div>
-          <form onSubmit={addEvent} style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center' }}>
-            <input value={newEvent} onChange={e => setNewEvent(e.target.value)} placeholder="Event name" required style={{ flex: 1 }} />
-            <button type="submit" className="btn-primary" disabled={!!saving['add-event']}>Add</button>
-            {saving['add-event'] && <SavingPill />}
-          </form>
-          {deletingEvents && <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>Saving…</div>}
-          {data.events.map(ev => {
-            const eventPending = isTempId(ev.id)
-            return (
-              <div key={ev.id} className="card" style={{ marginBottom: 8 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <strong>
-                    {ev.name}
-                    {eventPending && <SavingPill />}
-                  </strong>
-                  <button
-                    onClick={() => onDeleteEvent(ev.id)}
-                    disabled={eventPending}
-                    style={{ color: '#ccc', background: 'none', border: 'none', fontSize: 18 }}
-                  >×</button>
-                </div>
-                <div style={{ marginTop: 8, fontSize: 13 }}>
-                  {data.recruits.map(r => {
-                    const present = data.attendance.some(a => a.eventId === ev.id && a.recruitId === r.id)
-                    const attKey = `att:${ev.id}:${r.id}`
-                    const pending = eventPending || isTempId(r.id) || !!saving[attKey]
-                    return (
-                      <label key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                        <input
-                          type="checkbox"
-                          checked={present}
-                          disabled={pending}
-                          onChange={() => onToggleAttendance(ev.id, r.id)}
-                        />
-                        {r.name}
-                        {saving[attKey] && <SavingPill />}
-                      </label>
-                    )
-                  })}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      {tab === 'users' && (
-        <div>
-          <form onSubmit={addUser} style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center' }}>
-            <input value={newEmail} onChange={e => setNewEmail(e.target.value)} placeholder="Email to add" type="email" required style={{ flex: 1 }} />
-            <button type="submit" className="btn-primary" disabled={!!saving['add-user']}>Add brother</button>
-            {saving['add-user'] && <SavingPill />}
-          </form>
-          {removingUsers && <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>Saving…</div>}
-          {data.users.map(u => (
-            <div key={u.email} className="card" style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <div>{u.name || u.email}</div>
-                <div style={{ fontSize: 12, color: '#999' }}>{u.email} · {u.role}</div>
-              </div>
-              <div>
-                {u.role !== 'admin' && (
-                  <button
-                    onClick={() => onMakeAdmin(u.email)}
-                    disabled={!!saving[`role:${u.email}`]}
-                    style={{ fontSize: 12, marginRight: 8 }}
-                  >
-                    Make admin
-                  </button>
-                )}
-                {saving[`role:${u.email}`] && <SavingPill />}
-                {String(u.email || '').toLowerCase() !== String(me.email || '').toLowerCase() && (
-                  <button
-                    onClick={() => onRemoveUser(u.email)}
-                    disabled={!!saving[`user-remove:${u.email}`]}
-                    style={{ fontSize: 12, color: '#b83232' }}
-                  >Remove</button>
-                )}
-              </div>
-            </div>
-          ))}
-          <p style={{ fontSize: 12, color: '#aaa', marginTop: 16 }}>
-            Password resets are handled by Google. Users click “Forgot password” on the Google login screen.
-          </p>
-        </div>
-      )}
+      <div role="tabpanel" id={'panel-' + tab} aria-labelledby={'tab-' + tab}>
+        {tab === 'dashboard' && <DashboardTab data={data} tally={tally} ctl={ctl} />}
+        {tab === 'recruits' && <RecruitsTab data={data} ctl={ctl} />}
+        {tab === 'events' && <EventsTab data={data} ctl={ctl} />}
+        {tab === 'users' && <UsersTab data={data} ctl={ctl} />}
+        {tab === 'settings' && <SettingsTab data={data} ctl={ctl} />}
+      </div>
     </div>
   )
 }
