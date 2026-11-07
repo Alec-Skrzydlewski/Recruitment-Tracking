@@ -19,7 +19,7 @@ test('authorizeDrive requests only the existing Drive scope and touches nothing 
   const statsBefore = JSON.stringify(stats);
   const cacheBefore = cacheLog.length;
   assert.equal(api.authorizeDrive(), 'Drive access granted');
-  assert.deepEqual(scriptAppLog, [['FULL', [DRIVE]]]);
+  assert.equal(JSON.stringify(scriptAppLog), JSON.stringify([['FULL', [DRIVE]]]));
   assert.equal(driveState.fileLookups, 0);
   assert.equal(driveState.createFolderCalls, 0);
   assert.equal(JSON.stringify(props), propsBefore);
