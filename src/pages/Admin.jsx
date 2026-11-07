@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useRuntime } from '../runtime'
 import {
   apply, rollback, replaceId, replaceIdInMap, nextTempId, isTempId, createInflightGuard,
@@ -12,9 +13,11 @@ import RecruitsTab from './admin/RecruitsTab'
 import EventsTab from './admin/EventsTab'
 import UsersTab from './admin/UsersTab'
 import SettingsTab from './admin/SettingsTab'
+import AnalyticsTab from './admin/AnalyticsTab'
 
 const TABS = [
   ['dashboard', 'Dashboard'],
+  ['analytics', 'Analytics'],
   ['recruits', 'Recruits'],
   ['events', 'Events'],
   ['users', 'Members'],
@@ -34,7 +37,11 @@ function requestId() {
 export default function Admin() {
   const runtime = useRuntime()
   const { api, me, loadPhotos, mode } = runtime
-  const [tab, setTab] = useState('dashboard')
+  // The selected tab lives in the URL (?tab=analytics), so every tab is
+  // linkable. The whole page is already admin-only (routes.jsx).
+  const [params, setParams] = useSearchParams()
+  const tab = TABS.some(([id]) => id === params.get('tab')) ? params.get('tab') : 'dashboard'
+  const setTab = id => setParams(id === 'dashboard' ? {} : { tab: id }, { replace: false })
   const [data, setData] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [attempt, setAttempt] = useState(0)
@@ -407,6 +414,7 @@ export default function Admin() {
 
       <div role="tabpanel" id={'panel-' + tab} aria-labelledby={'tab-' + tab}>
         {tab === 'dashboard' && <DashboardTab data={data} tally={tally} ctl={ctl} />}
+        {tab === 'analytics' && <AnalyticsTab data={data} />}
         {tab === 'recruits' && <RecruitsTab data={data} ctl={ctl} />}
         {tab === 'events' && <EventsTab data={data} ctl={ctl} />}
         {tab === 'users' && <UsersTab data={data} ctl={ctl} />}

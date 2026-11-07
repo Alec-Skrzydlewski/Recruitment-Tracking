@@ -219,3 +219,30 @@ input[type='file'] { max-width: 100%; min-width: 0; font-size: 14px; }
   .tabs { flex-wrap: wrap; overflow-x: visible; row-gap: 0; }
   .tab { padding: 10px 10px; }
 }
+
+/* ---------- Analytics ---------- */
+.table-wrap { overflow-x: auto; max-width: 100%; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.table-wrap:focus-visible { outline: none; box-shadow: var(--focus); }
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.data-table th, .data-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.data-table thead th { background: var(--purple-50); color: var(--purple); font-weight: 700; }
+.data-table tbody tr:last-child > * { border-bottom: none; }
+.data-table tr.is-selected > * { background: var(--gold-50); }
+.data-table .badge { margin-left: 6px; }
+.data-table.compact th, .data-table.compact td { padding: 4px 6px; text-align: center; }
+.th-sort { background: none; border: none; padding: 0; min-height: 0; color: inherit; font: inherit; font-weight: 700; cursor: pointer; }
+.th-sort:hover:not(:disabled) { background: none; text-decoration: underline; }
+.link-btn { background: none; border: none; padding: 0; min-height: 0; color: var(--purple); font: inherit; font-weight: 650; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.link-btn:hover:not(:disabled) { background: none; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.chips { border: none; display: flex; flex-wrap: wrap; gap: 6px; }
+.chips legend { width: 100%; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--line-strong); border-radius: 999px; font-size: 13px; cursor: pointer; background: var(--surface); }
+.chip input { width: 14px; height: 14px; }
+.chip-on { border-color: var(--purple); background: var(--purple-50); color: var(--purple); }
+.hist { margin-top: 12px; }
+.hist svg { width: 100%; max-width: 420px; height: auto; display: block; margin: 6px 0; }
+.hist-bar { fill: var(--purple); }
+.hist-empty { fill: var(--line); }
+.hist-axis { font-size: 11px; fill: var(--muted); }
+.analytics details summary { cursor: pointer; }

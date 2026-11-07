@@ -100,3 +100,15 @@ test('demo mirrors live: cascades delete votes, cleanup is staged and exact', as
   assert.equal(after.votes.some(v => v.recruitId === rec) || after.attendance.some(a => a.recruitId === rec) || after.notes.some(n => n.recruitId === rec), false);
   assert.equal((await b.call(ADMIN, 'getVoteCleanup')).count, 0, 'cascades never leave invalid votes');
 });
+
+test('demo addRecruit requires a valid graduation year like the server', async () => {
+  const b = createDemoBackend({ latencyMs: 0 });
+  const n = b.snapshot().recruits.length;
+  for (const gradYear of [undefined, '', '  ', '27', 'abcd', '1999', '2101']) {
+    await assert.rejects(() => b.call(ADMIN, 'addRecruit', { name: 'X', major: 'Finance (BSBA)', gradYear, photoDataBase64: 'AAAA' }), /Graduation year/, String(gradYear));
+  }
+  assert.equal(b.snapshot().recruits.length, n);
+  await b.call(ADMIN, 'addRecruit', { name: 'X', major: 'Finance (BSBA)', gradYear: '2030' });
+  assert.equal(b.snapshot().recruits.length, n + 1);
+  assert.ok(demoSeed().recruits.every(r => /^\d{4}$/.test(r.gradYear)), 'demo fixtures carry a year');
+});

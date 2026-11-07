@@ -33,6 +33,10 @@ const members = [
   ['sam.member@example.test', 'Sam Ortega', 'brother'],
   ['morgan.member@example.test', 'Morgan Pike', 'brother'],
   ['taylor.admin@example.test', 'Taylor Shore', 'admin'],
+  ['avery.k.member@example.test', 'Kai Avery', 'brother'],
+  ['drew.member@example.test', 'Drew Lin', 'brother'],
+  // Former member: their earlier ballots stay valid and counted.
+  ['quinn.former@example.test', 'Quinn Hart', 'brother', 'no'],
 ];
 
 export function demoSeed() {
@@ -51,6 +55,11 @@ export function demoSeed() {
     'morgan.member@example.test': { 'e-info': { 'r-avery': 8, 'r-blake': 7, 'r-casey': 7, 'r-emerson': 8 }, 'e-case': { 'r-emerson': 9, 'r-finley': 5 } },
     'taylor.admin@example.test': { 'e-info': { 'r-avery': 9, 'r-casey': 8, 'r-dakota': 6 }, 'e-case': { 'r-avery': 9, 'r-casey': 8, 'r-emerson': 8 } },
     'riley.member@example.test': { 'e-info': { 'r-blake': 7 } },
+    // Professional Night: fuller synthetic results for the Analytics tab,
+    // including a tie on the overall mean and a split-opinion recruit.
+    'avery.k.member@example.test': { 'e-info': { 'r-avery': 7, 'r-dakota': 4 }, 'e-pro': { 'r-avery': 8, 'r-blake': 9, 'r-casey': 6, 'r-emerson': 7, 'r-finley': 3 } },
+    'drew.member@example.test': { 'e-case': { 'r-avery': 7, 'r-finley': 9 }, 'e-pro': { 'r-avery': 9, 'r-blake': 4, 'r-casey': 8, 'r-emerson': 9, 'r-finley': 10 } },
+    'quinn.former@example.test': { 'e-info': { 'r-blake': 8, 'r-emerson': 6 }, 'e-pro': { 'r-blake': 10, 'r-finley': 4 } },
   };
   const votes = [];
   Object.keys(scores).forEach(userEmail => {
@@ -73,7 +82,7 @@ export function demoSeed() {
     notes: [
       { recruitId: 'r-avery', content: 'Strong questions about the audit rotation panel. Follow up about the analytics workshop.', updatedAt: '2026-09-16T02:00:00.000Z' },
     ],
-    users: members.map(([email, name, role]) => ({ email, name, role, active: 'yes' })),
+    users: members.map(([email, name, role, active]) => ({ email, name, role, active: active || 'yes' })),
   };
 }
 
