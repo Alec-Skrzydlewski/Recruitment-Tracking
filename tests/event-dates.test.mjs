@@ -168,7 +168,7 @@ test('demo backend parity: optional date, validation, round-trip', async () => {
   const A = DEMO_PERSONAS.find(p => p.role === 'admin').email;
   const data = await b.call(A, 'getAdminData');
   assert.equal(data.events.find(e => e.id === 'e-info').date, '2026-09-08');
-  assert.ok(!data.events.find(e => e.id === 'e-pro').date, 'one demo event stays undated');
+  assert.ok(data.events.every(e => e.date), 'showcase events are all dated (undated legacy covered in ui-flows)');
   await b.call(A, 'addEvent', { name: 'Leap', date: '2028-02-29' });
   await b.call(A, 'addEvent', { name: 'Plain' });
   const after = (await b.call(A, 'getAdminData')).events;

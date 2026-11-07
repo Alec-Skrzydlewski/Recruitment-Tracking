@@ -25,7 +25,7 @@ export const DEMO_PERSONAS = [
 export const SAMPLE_VOTERS = DEMO_PERSONAS.filter(p => p.role !== 'admin');
 
 // Recruit indices (roster order) absent from each later event.
-const ABSENT = { 'e-case': [3, 7, 10], 'e-pro': [1, 5] };
+const ABSENT = { 'e-case': [3, 7, 10] };
 
 function sampleAttendance(recruits, events) {
   return events.flatMap(e => recruits
@@ -58,8 +58,7 @@ export function demoSeed() {
   }));
   const events = [
     { id: 'e-info', name: 'Info Session', date: '2026-09-08' },
-    { id: 'e-case', name: 'Case Competition Social', date: '2026-09-15' },
-    { id: 'e-pro', name: 'Professional Night' },
+    { id: 'e-case', name: 'Case Comp', date: '2026-09-15' },
   ];
   const attendance = sampleAttendance(recruits, events);
   return {

@@ -375,8 +375,11 @@ test('showcase seed: default vote event has checked-in recruits and the dashboar
   assert.equal(/0\s*Votes/.test(document.body.textContent), false, 'sample votes are counted');
   await go('/vote');
   await until(() => byText('h1', 'Rate recruits'), 'vote page');
-  assert.equal(document.getElementById('vote-event').value, 'e-pro');
-  assert.equal(document.querySelectorAll('fieldset.rating').length, 9, 'checked-in recruits at the default event');
+  const sel = document.getElementById('vote-event');
+  assert.equal(sel.value, 'e-case');
+  assert.deepEqual([...sel.options].map(o => o.textContent), ['Info Session — Sep 8, 2026', 'Case Comp — Sep 15, 2026']);
+  assert.equal(/Professional Night|Case Competition/.test(document.body.textContent), false);
+  assert.equal(document.querySelectorAll('fieldset.rating').length, 8, 'checked-in recruits at the default event');
   assert.equal(document.querySelectorAll('fieldset.rating input:checked').length, 0, 'demo admin ballot starts empty');
   await click(document.querySelector('fieldset.rating input[aria-label^="9 for"]'));
   await until(() => byText('.status-saved', 'Saved'), 'admin vote saved');

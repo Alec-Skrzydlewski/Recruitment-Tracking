@@ -50,6 +50,10 @@ test('sample attendance and votes are coherent, varied and fictional', () => {
   }
   assert.ok(new Set(db.votes.map(v => v.score)).size >= 4, 'scores are not uniform');
   for (const r of db.recruits) assert.ok(db.votes.filter(v => v.recruitId === r.id).length >= 5, r.name + ' has analytics');
+  assert.deepEqual(db.events, [{ id: 'e-info', name: 'Info Session', date: '2026-09-08' }, { id: 'e-case', name: 'Case Comp', date: '2026-09-15' }]);
+  assert.equal(db.attendance.length, 19);
+  assert.equal(db.votes.length, 94);
+  assert.equal(db.attendance.some(a => a.eventId === 'e-pro') || db.votes.some(v => v.eventId === 'e-pro'), false);
   assert.deepEqual(demoSeed(), db, 'deterministic seed');
 });
 
