@@ -109,6 +109,8 @@ export const current = { ss: null, lockFails: false, tokeninfoDown: false, lockH
 export const cacheLog = [];
 
 export const warnLog = [];
+export const scriptAppLog = [];
+export const scriptAppState = { missing: false };
 
 export const driveState = {
   files: {}, folders: {}, blobReads: 0, fileLookups: 0, getFilesCalls: 0,
@@ -214,6 +216,13 @@ let uuidN = 0;
 const sandbox = {
   module: { exports: {} },
   console: { error() {}, log() {}, warn(...args) { warnLog.push(args.map(String).join(' ')); } },
+  ScriptApp: {
+    AuthMode: { FULL: 'FULL' },
+    requireScopes(mode, scopes) {
+      scriptAppLog.push([mode, scopes.slice()]);
+      if (scriptAppState.missing) throw new Error('Authorization is required to perform that action.');
+    },
+  },
   SpreadsheetApp: {
     getActiveSpreadsheet() {
       if (!current.ss) throw new Error('no active spreadsheet');

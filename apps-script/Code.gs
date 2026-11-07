@@ -1117,6 +1117,18 @@ function textField(value) {
 // photo-scoped error instead of a raw Google exception. The failing step and a
 // bounded category are written to the server log (Executions) for the owner;
 // the raw message, IDs, names, emails and stacks are never logged or returned.
+// Editor-only helper: run once from the Apps Script editor as the script owner.
+// ScriptApp.requireScopes shows Google's consent screen for the EXISTING
+// manifest Drive scope if it has not been granted (granular consent) and ends
+// the execution; otherwise it returns. It reads and writes nothing and is not
+// reachable from doPost. Web-app behavior is unchanged.
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive';
+/* global ScriptApp */
+function authorizeDrive() {
+  ScriptApp.requireScopes(ScriptApp.AuthMode.FULL, [DRIVE_SCOPE]);
+  return 'Drive access granted';
+}
+
 const DRIVE_OPS = ['openCachedFolder', 'openSheetFile', 'listSheetParents', 'findPhotoFolder',
   'createPhotoFolder', 'cacheFolderId', 'listPhotoFiles', 'createPhotoFile'];
 const DRIVE_ERROR_CATEGORIES = [
@@ -1388,6 +1400,7 @@ if (typeof module !== 'undefined') {
     uploadPhoto: uploadPhoto,
     getPhotos: getPhotos,
     classifyDriveError: classifyDriveError,
+    authorizeDrive: authorizeDrive,
     syncPhotoFolder: syncPhotoFolder,
     linkPhoto: linkPhoto,
     normalizeName: normalizeName,
