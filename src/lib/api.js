@@ -11,10 +11,11 @@ export const DEFAULT_TIMEOUT_MS = 20000;
 const TOKEN_KEY = 'google_token';
 
 export class ApiError extends Error {
-  constructor(message, code) {
+  constructor(message, code, diagnostic) {
     super(message);
     this.name = 'ApiError';
     this.code = code || 'ERROR';
+    if (typeof diagnostic === 'string' && /^[A-Za-z]+\/[A-Z_]+$/.test(diagnostic)) this.diagnostic = diagnostic;
   }
 }
 
@@ -115,7 +116,7 @@ export async function callApi(action, token, extra = {}, url = import.meta.env.V
       endSession(EXPIRED_SIGN_IN_MESSAGE);
       throw new ApiError(EXPIRED_SIGN_IN_MESSAGE, 'AUTH');
     }
-    throw new ApiError(String(data.error), data.code);
+    throw new ApiError(String(data.error), data.code, data.diagnostic);
   }
   return data;
 }

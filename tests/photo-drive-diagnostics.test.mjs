@@ -99,3 +99,40 @@ test('classifier is bounded', () => {
   assert.equal(api.classifyDriveError(null), 'OTHER');
   assert.equal(api.classifyDriveError({ get message() { throw new Error('x'); } }), 'OTHER');
 });
+
+test('admin error carries only the bounded diagnostic token', () => {
+  fresh(); driveState.deny = true;
+  const res = post('syncPhotoFolder', 'owner');
+  assert.equal(res.diagnostic, 'openSheetFile/SCOPE_NOT_GRANTED');
+  assert.deepEqual(Object.keys(res).sort(), ['code', 'diagnostic', 'error']);
+});
+
+test('checkPhotoAccess is admin-only and read-only (no folder create, no property, no Sheet writes)', () => {
+  let ss = fresh();
+  const before = snapshot(ss);
+  const missing = post('checkPhotoAccess', 'owner');
+  assert.deepEqual(missing, { ok: true, sheetFile: true, parentFolder: true, photoFolder: false, imageCount: 0 });
+  assert.equal(driveState.createFolderCalls, 0);
+  assert.equal(props.PHOTO_FOLDER_ID, undefined);
+  assert.deepEqual(snapshot(ss), before);
+
+  ss = fresh(); seedPhotoFolder(); delete props.PHOTO_FOLDER_ID;
+  const ok = post('checkPhotoAccess', 'owner');
+  assert.equal(ok.photoFolder, true);
+  assert.equal(props.PHOTO_FOLDER_ID, undefined, 'probe never caches the folder id');
+
+  fresh(); driveState.deny = true;
+  const denied = post('checkPhotoAccess', 'owner');
+  assert.equal(denied.code, 'PHOTO_UNAVAILABLE');
+  assert.equal(denied.error, GENERIC);
+  assert.equal(denied.diagnostic, 'openSheetFile/SCOPE_NOT_GRANTED');
+
+  fresh(); driveState.throwOn = { getFoldersByName: 'Access denied ' + SECRETY };
+  assert.equal(post('checkPhotoAccess', 'owner').diagnostic, 'findPhotoFolder/ACCESS_DENIED');
+
+  fresh(); driveState.deny = true;
+  const member = post('checkPhotoAccess', 'member');
+  assert.notEqual(member.code, 'PHOTO_UNAVAILABLE');
+  assert.equal(member.diagnostic, undefined);
+  assert.equal(driveState.fileLookups, 0, 'members never reach Drive');
+});

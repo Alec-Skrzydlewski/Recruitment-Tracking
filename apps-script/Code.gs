@@ -56,7 +56,7 @@ const ADMIN_ACTIONS = {
   getAdminData: true, addRecruit: true, deleteRecruit: true, uploadPhoto: true,
   syncPhotoFolder: true, linkPhoto: true, addEvent: true, deleteEvent: true,
   setAttendance: true, saveNote: true, manageUser: true, wipeCycle: true,
-  getVoteCleanup: true, cleanupInvalidVotes: true,
+  getVoteCleanup: true, cleanupInvalidVotes: true, checkPhotoAccess: true,
 };
 
 function doPost(e) {
@@ -77,7 +77,12 @@ function doPost(e) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     return json(dispatch(ss, user, config, String(body.action || ''), body) || { ok: true });
   } catch (err) {
-    if (err && err.publicCode) return json(errorResult(err.publicCode, err.message));
+    if (err && err.publicCode) {
+      const out = errorResult(err.publicCode, err.message);
+      // Bounded tokens only (step label + category), never raw Google text.
+      if (err.photoDiagnostic) out.diagnostic = err.photoDiagnostic;
+      return json(out);
+    }
     try { console.error(err && err.stack ? err.stack : err); } catch (logErr) { /* ignore */ }
     return json(errorResult('INTERNAL', 'Something went wrong on the server. Try again.'));
   }
@@ -108,6 +113,7 @@ function dispatch(ss, user, config, action, body) {
       case 'deleteRecruit': return deleteRecruit(ss, user, body);
       case 'uploadPhoto': return uploadPhoto(ss, user, body);
       case 'syncPhotoFolder': return syncPhotoFolder(ss, user);
+      case 'checkPhotoAccess': return checkPhotoAccess(ss);
       case 'linkPhoto': return linkPhoto(ss, user, body);
       case 'addEvent': return addEvent(ss, user, body);
       case 'deleteEvent': return deleteEvent(ss, user, body);
@@ -1133,7 +1139,9 @@ function classifyDriveError(err) {
 
 function logDriveFailure(op, err) {
   const label = DRIVE_OPS.indexOf(op) === -1 ? 'unknown' : op;
-  try { console.warn('PHOTO_DRIVE_FAILURE op=' + label + ' category=' + classifyDriveError(err)); } catch (e) { /* ignore */ }
+  const category = classifyDriveError(err);
+  try { console.warn('PHOTO_DRIVE_FAILURE op=' + label + ' category=' + category); } catch (e) { /* ignore */ }
+  return label + '/' + category;
 }
 
 function driveCall(op, fn) {
@@ -1141,8 +1149,9 @@ function driveCall(op, fn) {
     return fn();
   } catch (err) {
     if (err && err.publicCode) throw err;
-    logDriveFailure(op, err);
-    throw appError('PHOTO_UNAVAILABLE', PHOTO_UNAVAILABLE);
+    const failure = appError('PHOTO_UNAVAILABLE', PHOTO_UNAVAILABLE);
+    failure.photoDiagnostic = logDriveFailure(op, err);
+    throw failure;
   }
 }
 
@@ -1170,6 +1179,23 @@ function getPhotoFolder(ss, create) {
   const folder = found || driveCall('createPhotoFolder', () => parent.createFolder(PHOTO_FOLDER_NAME));
   driveCall('cacheFolderId', () => props.setProperty(PHOTO_FOLDER_PROP, folder.getId()));
   return folder;
+}
+
+// Admin-only, read-only Drive check: the same lookups sync uses, but it never
+// creates the folder, never caches its id and never touches the Sheet.
+function checkPhotoAccess(ss) {
+  const file = driveCall('openSheetFile', () => DriveApp.getFileById(ss.getId()));
+  const parent = driveCall('listSheetParents', () => {
+    const parents = file.getParents();
+    return parents.hasNext() ? parents.next() : null;
+  });
+  if (!parent) return { ok: true, sheetFile: true, parentFolder: false, photoFolder: false, imageCount: 0 };
+  const found = driveCall('findPhotoFolder', () => {
+    const it = parent.getFoldersByName(PHOTO_FOLDER_NAME);
+    return it.hasNext() ? it.next() : null;
+  });
+  if (!found) return { ok: true, sheetFile: true, parentFolder: true, photoFolder: false, imageCount: 0 };
+  return { ok: true, sheetFile: true, parentFolder: true, photoFolder: true, imageCount: listImageFiles(found).length };
 }
 
 function listImageFiles(folder) {
