@@ -100,13 +100,25 @@ function mount(element) {
   return root;
 }
 
-test('demo: landing → voter persona → vote saves → admin sees it → wipe guard → reset; zero network', async () => {
+test('demo opens directly on the admin dashboard: no landing, no persona chooser, no sign-in', async () => {
   const backend = ui.createDemoBackend({ latencyMs: 0 });
   const root = mount(createElement(ui.DemoApp, { backend }));
-  await until(() => byText('h2', 'Try it as'), 'landing');
-  assert.ok(byText('.demo-ribbon', 'Portfolio demo'));
+  await until(() => byText('h1', 'Recruitment overview'), 'admin dashboard first');
+  assert.equal(window.location.pathname, '/admin');
+  assert.equal(document.querySelector('.persona, .persona-grid'), null);
+  assert.equal(/Try it as|Switch persona|persona/i.test(document.body.textContent), false);
+  assert.equal(/Sign in|Sign out/i.test(document.body.textContent), false);
+  assert.ok(byText('.demo-ribbon', 'Demo'));
+  assert.ok(byText('.header-nav a', 'Vote'));
+  act(() => root.unmount());
+  assert.deepEqual(network, []);
+});
 
-  await click(byText('button.persona', 'Riley Brooks'));
+const VOTER = { email: 'riley.member@example.test', name: 'Riley Brooks', role: 'brother' };
+
+test('demo: voter → vote saves → admin sees it → wipe guard → reset; zero network', async () => {
+  const backend = ui.createDemoBackend({ latencyMs: 0 });
+  let root = mount(createElement(ui.DemoApp, { backend, user: VOTER }));
   await until(() => byText('h1', 'Rate recruits'), 'vote page');
   assert.equal(window.location.pathname, '/vote');
   const select = document.getElementById('vote-event');
@@ -123,8 +135,8 @@ test('demo: landing → voter persona → vote saves → admin sees it → wipe 
   assert.equal(stored.score, 8);
   assert.equal(document.querySelectorAll('fieldset.rating').length, 5, 'only attendees of the selected event are shown');
 
-  await click(byText('.demo-ribbon button', 'Switch persona'));
-  await click(byText('button.persona', 'Jordan Vale'));
+  act(() => root.unmount());
+  root = mount(createElement(ui.DemoApp, { backend }));
   await until(() => byText('h1', 'Recruitment overview'), 'admin dashboard');
   assert.equal(/exclud/i.test(document.body.textContent), false, 'no excluded-vote category in the UI');
 
@@ -179,7 +191,7 @@ test('demo: landing → voter persona → vote saves → admin sees it → wipe 
   assert.equal(backend.snapshot().recruits.length, 0);
   assert.equal(backend.snapshot().users.length, 8);
 
-  await click(byText('.demo-ribbon button', 'Reset demo data'));
+  await click(byText('.demo-ribbon button', 'Reset'));
   await until(() => backend.snapshot().recruits.length === 6 && byText('h1', 'Recruitment overview'), 'reset');
 
   act(() => root.unmount());
@@ -199,9 +211,7 @@ test('demo: a failed vote rolls back, explains, and retries on request', async (
       return backend.call(email, action, extra);
     },
   };
-  const root = mount(createElement(ui.DemoApp, { backend: flaky }));
-  await until(() => byText('button.persona', 'Riley Brooks'), 'landing');
-  await click(byText('button.persona', 'Riley Brooks'));
+  const root = mount(createElement(ui.DemoApp, { backend: flaky, user: VOTER }));
   await until(() => byText('h1', 'Rate recruits'), 'vote page');
   await click(document.querySelector('input[aria-label="6 for Casey Lark"]'));
   const alert = await until(() => byText('[role="alert"]', 'Not saved'), 'failure message');
@@ -218,8 +228,6 @@ test('demo: admin note save failure keeps the draft', async () => {
   const backend = ui.createDemoBackend({ latencyMs: 0 });
   const flaky = { ...backend, call(email, action, extra) { return action === 'saveNote' ? Promise.reject(new Error('The server is busy. Try again in a moment.')) : backend.call(email, action, extra); } };
   const root = mount(createElement(ui.DemoApp, { backend: flaky }));
-  await until(() => byText('button.persona', 'Jordan Vale'), 'landing');
-  await click(byText('button.persona', 'Jordan Vale'));
   await until(() => document.getElementById('note-r-blake'), 'dashboard notes');
   await type(document.getElementById('note-r-blake'), 'Great follow-up questions');
   const save = [...document.querySelectorAll('button')].filter(b => b.textContent === 'Save note').find(b => !b.disabled);
@@ -255,8 +263,6 @@ async function go(url) {
 test('analytics: one recruit dropdown, individual results, switching changes every detail', async () => {
   const backend = ui.createDemoBackend({ latencyMs: 0 });
   const root = mount(createElement(ui.DemoApp, { backend }));
-  await until(() => byText('button.persona', 'Jordan Vale'), 'landing');
-  await click(byText('button.persona', 'Jordan Vale'));
   await until(() => byText('button[role="tab"]', 'Analytics'), 'admin tabs');
   await click(byText('button[role="tab"]', 'Analytics'));
   const select = await until(() => document.getElementById('an-recruit'), 'recruit select');
@@ -311,8 +317,6 @@ test('analytics: with no recruits it explains instead of showing an empty select
     return backend.call(email, action, extra).then(r => (action === 'getAdminData' ? { ...r, recruits: [], attendance: [], votes: [], notes: [] } : r));
   } };
   const root = mount(createElement(ui.DemoApp, { backend: empty }));
-  await until(() => byText('button.persona', 'Jordan Vale'), 'landing');
-  await click(byText('button.persona', 'Jordan Vale'));
   await until(() => byText('button[role="tab"]', 'Analytics'), 'admin tabs');
   await click(byText('button[role="tab"]', 'Analytics'));
   await until(() => byText('p', 'No recruits yet'), 'empty state');
@@ -323,9 +327,7 @@ test('analytics: with no recruits it explains instead of showing an empty select
 
 test('analytics: voters cannot reach it; an admin read failure shows an error, not empty stats', async () => {
   const backend = ui.createDemoBackend({ latencyMs: 0 });
-  let root = mount(createElement(ui.DemoApp, { backend }));
-  await until(() => byText('button.persona', 'Riley Brooks'), 'landing');
-  await click(byText('button.persona', 'Riley Brooks'));
+  let root = mount(createElement(ui.DemoApp, { backend, user: VOTER }));
   await until(() => byText('h1', 'Rate recruits'), 'vote page');
   await go('/admin?tab=analytics');
   await until(() => window.location.pathname === '/vote', 'voter redirected');
@@ -334,8 +336,6 @@ test('analytics: voters cannot reach it; an admin read failure shows an error, n
 
   const failing = { ...backend, call(email, action, extra) { return action === 'getAdminData' ? Promise.reject(new Error('The server is busy. Try again in a moment.')) : backend.call(email, action, extra); } };
   root = mount(createElement(ui.DemoApp, { backend: failing }));
-  await until(() => byText('button.persona', 'Jordan Vale'), 'landing');
-  await click(byText('button.persona', 'Jordan Vale'));
   await until(() => byText('h2, h1', "Couldn't load admin data") || byText('*', "Couldn't load admin data"), 'read failure');
   assert.equal(document.body.textContent.includes('Recruit comparison'), false);
   act(() => root.unmount());
@@ -345,8 +345,6 @@ test('analytics: voters cannot reach it; an admin read failure shows an error, n
 test('add recruit requires a graduation year: labelled, required, nothing written without it', async () => {
   const backend = ui.createDemoBackend({ latencyMs: 0 });
   const root = mount(createElement(ui.DemoApp, { backend }));
-  await until(() => byText('button.persona', 'Jordan Vale'), 'landing');
-  await click(byText('button.persona', 'Jordan Vale'));
   await until(() => byText('button[role="tab"]', 'Recruits'), 'admin');
   await click(byText('button[role="tab"]', 'Recruits'));
   const year = await until(() => document.getElementById('recruit-year'), 'form');
