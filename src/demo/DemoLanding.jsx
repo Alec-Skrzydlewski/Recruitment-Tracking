@@ -18,7 +18,7 @@ export default function DemoLanding({ personas, onChoose }) {
         <p className="lede" style={{ maxWidth: 640, marginTop: 12 }}>
           A React app on a Google Sheets + Apps Script backend that a student organization can run for free.
           Members rate recruits after each event; admins manage attendance and see live averages.
-          This demo needs no Google login. It uses the Jacksonville Jaguars’ offensive roster and official player photos. Degrees, graduation years, attendance and any ratings are example data—not real player credentials or assessments.
+          This demo needs no Google login. It uses the Jacksonville Jaguars’ starting offense and official player photos. Degrees, graduation years, attendance and any ratings are example data—not real player credentials or assessments.
         </p>
       </section>
 

@@ -7,11 +7,11 @@ import { createDemoBackend } from '../src/demo/demoBackend.js';
 const admin = DEMO_PERSONAS.find(p => p.role === 'admin').email;
 const voter = DEMO_PERSONAS.find(p => p.role === 'brother').email;
 
-test('showcase contains all 39 unique Jaguars with explicit fictional education', () => {
+test('showcase contains all 12 first-string Jaguars with explicit fictional education', () => {
   const db = demoSeed();
-  assert.equal(db.recruits.length, 39);
-  assert.equal(new Set(db.recruits.map(r => r.id)).size, 39);
-  assert.equal(new Set(db.recruits.map(r => r.name)).size, 39);
+  assert.equal(db.recruits.length, 12);
+  assert.equal(new Set(db.recruits.map(r => r.id)).size, 12);
+  assert.equal(new Set(db.recruits.map(r => r.name)).size, 12);
   assert.ok(db.recruits.some(r => r.name === 'Trevor Lawrence'));
   assert.equal(db.votes.length, 0, 'no invented player ratings');
   for (const r of db.recruits) {
@@ -20,7 +20,7 @@ test('showcase contains all 39 unique Jaguars with explicit fictional education'
     assert.match(r.gradYear, /^20(27|28|29|30)$/);
     assert.ok(fs.statSync(new URL('../src/demo/photos/jaguars/' + r.photoPath.split('/').pop(), import.meta.url)).size > 10000);
   }
-  assert.equal(db.attendance.length, 39);
+  assert.equal(db.attendance.length, 12);
 });
 
 test('photos map every seeded player to a bundled official image', async () => {
@@ -45,7 +45,7 @@ test('visitor votes and resets are isolated from other visitors', async () => {
   assert.equal(b.snapshot().votes.length, 0);
   a.reset();
   assert.equal(a.snapshot().votes.length, 0);
-  assert.equal((await a.call(admin, 'getAdminData')).recruits.length, 39);
+  assert.equal((await a.call(admin, 'getAdminData')).recruits.length, 12);
   await assert.rejects(() => a.call(voter, 'getAdminData'), /Admin only/);
 });
 

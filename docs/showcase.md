@@ -4,8 +4,10 @@ Vercel builds `npm run build:demo` into `dist-demo`. It needs no Google account,
 Google configuration or Apps Script deployment. Choose a demo persona to explore
 admin or member workflows. State is in memory, isolated per tab, and resets on reload.
 
-39 offensive players include active, injured/reserve and practice-squad players
-from the official Jaguars roster fetched November 7, 2026. Headshots are bundled
+12 first-string offensive players come from the official Jaguars depth chart
+fetched November 7, 2026. This is 12 rather than 11 because the official chart
+lists both Bhayshul Tuten and Chris Rodriguez Jr. as first-string running backs.
+Backups, reserves and practice-squad players are omitted. Headshots are bundled
 local assets; no third-party photo fetches are required. Provenance is recorded
 in `jaguars-photo-provenance.csv`. The project claims no image ownership,
 endorsement or license. Degrees and graduation years are fictional examples.
