@@ -1,4 +1,4 @@
-// Official depth-chart first string (12: two co-first-string RBs). Education is fictional.
+// Official first-string offense; one RB (first-listed Tuten), 11 starters. Education is fictional.
 export const JAGUARS_RECRUITS = [
   {
     "id": "r-jax-trevor-lawrence",
@@ -16,15 +16,6 @@ export const JAGUARS_RECRUITS = [
     "secondMajor": "",
     "gradYear": "2027",
     "photoPath": "/demo-photos/jaguars/bhayshul-tuten.jpg",
-    "educationIsFictional": true
-  },
-  {
-    "id": "r-jax-chris-rodriguez-jr",
-    "name": "Chris Rodriguez Jr.",
-    "major": "Hospitality Management (BSBA) (example)",
-    "secondMajor": "",
-    "gradYear": "2028",
-    "photoPath": "/demo-photos/jaguars/chris-rodriguez-jr.jpg",
     "educationIsFictional": true
   },
   {

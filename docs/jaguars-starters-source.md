@@ -25,3 +25,9 @@
 - **Roster status:** all 12 are Active. Anton Harrison (OL) is on Reserve/Injured and is not on the depth chart.
 - **Files:** `starters-seed.json` uses the same record format as `demo-seed.json`, plus `depthChartPosition` and `depthTier`. Photos are `photos-web/<slug>.jpg`.
 - **Untouched:** the 39-player files are kept as they were.
+
+## Showcase selection
+
+Alec requested one running back at 4:33 PM MT. The showcase keeps first-listed
+Bhayshul Tuten and omits Chris Rodriguez Jr., yielding 11 starters. The source
+table above records the unmodified official depth chart, not the final demo list.
