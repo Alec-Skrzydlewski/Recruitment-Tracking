@@ -17,7 +17,7 @@ export default function EventsTab({ data, ctl }) {
       <form className="card" onSubmit={submit}>
         <label className="field-label" htmlFor="event-name">New event</label>
         <div className="row">
-          <input id="event-name" className="grow" value={name} onChange={e => setName(e.target.value)} required maxLength={120} placeholder="e.g. Info Night" style={{ flex: 1 }} />
+          <input id="event-name" className="grow" value={name} onChange={e => setName(e.target.value)} required maxLength={120} placeholder="e.g. Info Session" style={{ flex: 1 }} />
           <button type="submit" className="btn-primary" disabled={!!ctl.saving['add-event'] || ctl.wiping}>Add event</button>
         </div>
       </form>

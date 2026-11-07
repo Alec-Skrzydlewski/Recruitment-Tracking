@@ -138,6 +138,7 @@ test('demo: landing → voter persona → vote saves → admin sees it → wipe 
   assert.equal(backend.snapshot().votes.some(v => v.eventId === 'e-retired'), false);
 
   await click(byText('button[role="tab"]', 'Events'));
+  assert.equal(document.getElementById('event-name').placeholder, 'e.g. Info Session', 'new-event example');
   const firstEvent = backend.snapshot().events[0];
   const eventVotes = backend.snapshot().votes.filter(v => v.eventId === firstEvent.id).length;
   const prompts = [];
