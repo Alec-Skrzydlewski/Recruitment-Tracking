@@ -1,0 +1,63 @@
+// The demo backend must enforce the same rules as Code.gs so the public demo
+// shows real behavior, not a mock that accepts anything.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createDemoBackend } from '../src/demo/demoBackend.js';
+import { demoSeed, DEMO_PERSONAS } from '../src/demo/seed.js';
+
+const ADMIN = DEMO_PERSONAS.find(p => p.role === 'admin').email;
+const VOTER = DEMO_PERSONAS.find(p => p.role === 'brother').email;
+
+test('seed is fictional: reserved example.test emails only, no external URLs', () => {
+  const text = JSON.stringify(demoSeed());
+  const emails = text.match(/[\w.+-]+@[\w.-]+/g) || [];
+  assert.ok(emails.length > 0);
+  emails.forEach(e => assert.match(e, /@example\.test$/));
+  assert.doesNotMatch(text, /https?:\/\//);
+});
+
+test('voter: reads own votes, can vote only for attendees, cannot reach admin actions', async () => {
+  const b = createDemoBackend({ latencyMs: 0 });
+  const data = await b.call(VOTER, 'getVoteData');
+  assert.ok(data.myVotes.every(v => v.eventId && v.score));
+  assert.equal(data.votes, undefined);
+  await assert.rejects(() => b.call(VOTER, 'castVote', { eventId: 'e-info', recruitId: 'r-finley', score: 5 }), /Invalid vote/);
+  await assert.rejects(() => b.call(VOTER, 'castVote', { eventId: 'e-info', recruitId: 'r-avery', score: 11 }), /Invalid vote/);
+  assert.equal((await b.call(VOTER, 'castVote', { eventId: 'e-info', recruitId: 'r-avery', score: 9 })).ok, true);
+  for (const action of ['getAdminData', 'addRecruit', 'manageUser', 'wipeCycle', 'setAttendance']) {
+    await assert.rejects(() => b.call(VOTER, action, {}), /Admin only/, action);
+  }
+  await assert.rejects(() => b.call('nobody@example.test', 'getVoteData'), /Not authorized/);
+});
+
+test('admin: last-admin and self-removal guards, wipe guard, reset to seed', async () => {
+  const b = createDemoBackend({ latencyMs: 0 });
+  await assert.rejects(() => b.call(ADMIN, 'manageUser', { op: 'remove', email: ADMIN }), /cannot remove yourself/);
+  await b.call(ADMIN, 'manageUser', { op: 'setRole', email: 'taylor.admin@example.test', role: 'brother' });
+  await assert.rejects(() => b.call('taylor.admin@example.test', 'manageUser', { op: 'setRole', email: ADMIN, role: 'brother' }), /Admin only/);
+  await assert.rejects(() => b.call(ADMIN, 'manageUser', { op: 'setRole', email: ADMIN, role: 'brother' }), /last admin/);
+  await assert.rejects(() => b.call(ADMIN, 'wipeCycle', { confirm: 'WIPE CYCLE', expected: {} }), /Data changed/);
+  const d = await b.call(ADMIN, 'getAdminData');
+  const expected = { Recruits: d.recruits.length, Events: d.events.length, EventRecruits: d.attendance.length, Votes: d.votes.length, Notes: d.notes.length };
+  assert.equal((await b.call(ADMIN, 'wipeCycle', { confirm: 'WIPE CYCLE', expected })).ok, true);
+  assert.equal((await b.call(ADMIN, 'getAdminData')).recruits.length, 0);
+  b.reset();
+  assert.equal((await b.call(ADMIN, 'getAdminData')).recruits.length, demoSeed().recruits.length);
+});
+
+test('creates are idempotent by requestId and attendance is desired-state', async () => {
+  const b = createDemoBackend({ latencyMs: 0 });
+  const a = await b.call(ADMIN, 'addEvent', { name: 'Mixer', requestId: 'r1' });
+  const c = await b.call(ADMIN, 'addEvent', { name: 'Mixer', requestId: 'r1' });
+  assert.equal(a.id, c.id);
+  await b.call(ADMIN, 'setAttendance', { eventId: a.id, recruitId: 'r-avery', present: true });
+  await b.call(ADMIN, 'setAttendance', { eventId: a.id, recruitId: 'r-avery', present: true });
+  assert.equal(b.snapshot().attendance.filter(x => x.eventId === a.id).length, 1);
+});
+
+test('photos are generated local SVGs', async () => {
+  const b = createDemoBackend({ latencyMs: 0 });
+  const res = await b.call(VOTER, 'getPhotos', { ids: ['demo-photo-r-avery', 'not-linked'] });
+  assert.deepEqual(Object.keys(res.photos), ['demo-photo-r-avery']);
+  assert.match(res.photos['demo-photo-r-avery'], /^data:image\/svg\+xml/);
+});

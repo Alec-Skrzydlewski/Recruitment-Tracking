@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -14,5 +17,15 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - run: npm run lint
       - run: npm test
-      - run: npm run build
+      - name: Live build (fails closed without config)
+        run: npm run build
+      - name: Live build with placeholder config compiles
+        run: npx vite build --outDir dist-configured
+        env:
+          VITE_GOOGLE_CLIENT_ID: placeholder.apps.googleusercontent.com
+          VITE_APPS_SCRIPT_URL: https://script.google.com/macros/s/PLACEHOLDER/exec
+      - run: npm run build:demo
+      - name: Demo bundle contains no live endpoints
+        run: npm run check:bundle

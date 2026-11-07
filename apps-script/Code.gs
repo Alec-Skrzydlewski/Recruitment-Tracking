@@ -25,7 +25,6 @@ const SCHEMA = {
   Votes: ['eventId', 'recruitId', 'userEmail', 'score', 'timestamp'],
   Notes: ['recruitId', 'content', 'updatedAt'],
 };
-const RECRUIT_COLUMNS = SCHEMA.Recruits;
 const ROLES = ['admin', 'brother'];
 const LIMITS = { name: 120, major: 120, note: 5000, email: 254, id: 64 };
 
@@ -187,6 +186,7 @@ function requireAdmin(ss, user) {
 function cleanText(value, max) {
   if (value === null || value === undefined) return '';
   // Drop control characters except newline/tab, then trim.
+  // eslint-disable-next-line no-control-regex
   const text = String(value).replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, '').trim();
   return text.length > max ? null : text;
 }

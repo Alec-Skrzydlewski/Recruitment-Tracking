@@ -1,22 +1,24 @@
 import { GoogleLogin } from '@react-oauth/google'
+import { useState } from 'react'
+import { BrandMark } from '../components/ui'
 
 export default function Login({ onToken, message }) {
+  const [localError, setLocalError] = useState('')
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
-      <div style={{ textAlign: 'center', maxWidth: 400 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 500, marginBottom: 8 }}>Recruitment Tracker</h1>
-        <p style={{ color: '#888', marginBottom: 24, fontSize: 14 }}>Sign in with your Google account</p>
-        {message ? <p style={{ color: '#b83232', fontSize: 14, marginBottom: 16 }}>{message}</p> : null}
-        <div className="card" style={{ padding: 24 }}>
+    <main className="page page-narrow" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center' }}>
+      <div className="card" style={{ width: '100%', padding: 28, textAlign: 'center' }}>
+        <div className="row" style={{ justifyContent: 'center', marginBottom: 12 }}><BrandMark /></div>
+        <h1>Recruitment Tracker</h1>
+        <p className="lede" style={{ marginBottom: 20 }}>Sign in with the Google account your chapter admin added.</p>
+        {(message || localError) && <p className="banner banner-error" role="alert">{message || localError}</p>}
+        <div className="row" style={{ justifyContent: 'center' }}>
           <GoogleLogin
-            onSuccess={cred => onToken(cred.credential)}
-            onError={() => alert('Login failed')}
+            onSuccess={cred => { setLocalError(''); onToken(cred.credential) }}
+            onError={() => setLocalError('Google sign-in did not complete. Please try again.')}
           />
         </div>
-        <p style={{ fontSize: 12, color: '#aaa', marginTop: 16 }}>
-          First person to sign in becomes admin.
-        </p>
+        <p className="small muted" style={{ marginTop: 20 }}>Not on the member list? Ask an admin to add your email.</p>
       </div>
-    </div>
+    </main>
   )
 }
