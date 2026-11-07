@@ -1,3 +1,15 @@
+> Hosting mode: this personal showcase defaults to the login-free browser demo.
+> Merging its showcase changes replaces the Google-login UI at the existing
+> personal hosted URL; it does not retire or revoke the separate Apps Script
+> backend. Visitor edits stay in memory and reset on reload. Real Jaguars names
+> and photos are used with fictional example education; no image license is
+> claimed. See [showcase deployment notes](docs/showcase.md).
+>
+> A future real DSP deployment must use a separate configuration with
+> `buildCommand: npm run build` and `outputDirectory: dist`, plus its own Google
+> configuration. Do not deploy the repository's demo-default Vercel config as a
+> real chapter application.
+
 # Recruitment Tracker
 
 A small, free-to-run recruitment voting app for a student business organization.
@@ -280,15 +292,19 @@ Do this once, under the Google account that should own the data.
 6. Configure the frontend host:
    - `VITE_APPS_SCRIPT_URL`: the web app URL from step 4.
    - `VITE_GOOGLE_CLIENT_ID`: the same client ID as step 3.
-   - Deploy with `npm run build`. `vercel.json` provides the SPA fallback
-     and security headers.
+   - For a separate real chapter deployment, explicitly set
+     `buildCommand` to `npm run build` and `outputDirectory` to `dist`.
+     This repository’s `vercel.json` defaults to the personal demo, so it
+     must be overridden/copied into a separate live configuration. Keep
+     the SPA fallback and security headers.
 7. Sign in as `OWNER_EMAIL`. If any sheet or column is missing, you'll see
    **Workspace setup needed**. Click **Initialize sheets**: it creates
    missing sheets and appends missing columns, and never reorders or deletes
    anything. Then add members in **Admin → Members**.
 
 The demo build (`npm run build:demo`, output `dist-demo/`) is static and
-needs neither value. Host it separately from any live deployment.
+needs neither value. It is the default for this personal Vercel project.
+Use a separate live configuration/project for a real chapter deployment.
 
 ## Upgrading an existing v2 deployment
 

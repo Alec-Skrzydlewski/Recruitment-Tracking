@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { BrowserRouter, Route, useNavigate } from 'react-router-dom'
 import { createDemoBackend } from './demoBackend'
 import { DEMO_PERSONAS } from './seed'
+import { DEMO_PHOTO_URLS } from './photoAssets'
 import { clearPhotoCache, setPhotoScope } from '../lib/photoCache'
 import { RuntimeContext } from '../runtime'
 import { MemberRoutes } from '../routes'
@@ -11,7 +12,7 @@ import DemoLanding from './DemoLanding'
 function DemoRibbon({ onReset, onSwitch, persona }) {
   return (
     <div className="demo-ribbon" role="note">
-      <strong>Portfolio demo</strong> · fictional data, stored only in this tab · no sign-in, no server
+      <strong>Portfolio demo</strong> · Jaguars example roster · education, attendance and any ratings are fictional · changes stay in this tab · no sign-in
       {persona && <button type="button" onClick={onSwitch}>Switch persona</button>}
       <button type="button" onClick={onReset}>Reset demo data</button>
     </div>
@@ -66,7 +67,7 @@ function DemoShell({ backend }) {
 }
 
 export default function DemoApp({ backend: injected }) {
-  const backend = useMemo(() => injected || createDemoBackend(), [injected])
+  const backend = useMemo(() => injected || createDemoBackend({ photoUrls: DEMO_PHOTO_URLS }), [injected])
   return (
     <BrowserRouter>
       <DemoShell backend={backend} />

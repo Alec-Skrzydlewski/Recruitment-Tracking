@@ -12,7 +12,7 @@ function read(dir) {
 }
 
 const DEMO_FORBIDDEN = [/script\.google(usercontent)?\.com/, /accounts\.google\.com/, /googleapis\.com/, /gsi\/client/, /VITE_APPS_SCRIPT_URL/, /apiVersion/];
-const LIVE_FORBIDDEN = [/example\.test/, /Avery Quill/, /Portfolio demo/];
+const LIVE_FORBIDDEN = [/example\.test/, /Avery Quill/, /Portfolio demo/, /Trevor Lawrence/, /r-jax-/, /jaguarsRoster/];
 
 let failed = false;
 for (const [file, text] of read('dist-demo')) {
@@ -26,4 +26,5 @@ for (const [file, text] of read('dist')) {
   }
 }
 if (failed) process.exit(1);
+if (fs.readdirSync('dist/assets').some(f => /trevor-lawrence|ameer-abdullah/.test(f))) throw new Error('live build contains demo headshots');
 console.log('bundle isolation ok: demo has no live endpoints; live has no demo data');

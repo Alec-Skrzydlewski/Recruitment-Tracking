@@ -1,7 +1,7 @@
 import { isValidEventDate } from '../lib/eventDate.js'
 // In-memory backend for the public demo. It implements the same actions and
 // the same authorization/validation rules as apps-script/Code.gs, against
-// fictional seed data, with no network access of any kind.
+// example seed data, with no live backend access. Headshots are local assets.
 import { demoSeed, abstractAvatar } from './seed.js';
 
 const ROLES = ['admin', 'brother'];
@@ -31,7 +31,7 @@ function id(value, label) {
   return v;
 }
 
-export function createDemoBackend({ latencyMs = 120, seed = demoSeed } = {}) {
+export function createDemoBackend({ latencyMs = 120, seed = demoSeed, photoUrls = {} } = {}) {
   let db = clone(seed());
   let seq = 0;
   const seenRequests = new Map();
@@ -120,7 +120,8 @@ export function createDemoBackend({ latencyMs = 120, seed = demoSeed } = {}) {
       requireMember(email);
       const photos = {};
       (Array.isArray(body.ids) ? body.ids : []).slice(0, 20).forEach(pid => {
-        if (db.recruits.some(r => r.photoFileId === pid)) photos[pid] = abstractAvatar(pid);
+        const recruit = db.recruits.find(r => r.photoFileId === pid);
+        if (recruit) photos[pid] = recruit.photoPath ? (photoUrls[recruit.photoPath] || recruit.photoPath) : abstractAvatar(pid);
       });
       return { photos, missing: [] };
     },
