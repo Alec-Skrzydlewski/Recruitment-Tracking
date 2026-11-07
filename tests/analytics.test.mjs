@@ -2,7 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildAnalytics, sortRows, csvCell, mean, median, sampleSd, histogram, rankCsv, filterOptions, filtersActive, EMPTY_FILTERS,
+  buildAnalytics, csvCell, mean, median, sampleSd, histogram,
+  buildRecruitAnalytics, recruitChoices, resolveSelection, recruitCsv,
 } from '../src/lib/analytics.js';
 import { buildTally } from '../src/lib/tally.js';
 
@@ -136,19 +137,9 @@ test('ranking: ties share a rank and are flagged; unrated recruits are unranked'
   assert.deepEqual([rk.r3, rk.r1, rk.r2, rk.r4], [1, 2, 2, null], 'competition ranking 1,2,2');
 });
 
-test('sorting keeps missing values last in both directions', () => {
-  const a = buildAnalytics(fixture());
-  for (const dir of ['asc', 'desc']) {
-    assert.equal(sortRows(a.rows, 'mean', dir).at(-1).id, 'r4');
-    assert.equal(sortRows(a.rows, 'sd', dir).at(-1).overall.sd, null);
-  }
-  assert.deepEqual(sortRows(a.rows, 'name', 'desc').map(r => r.name), ['Dee', 'Cy', 'Ben', 'Ada']);
-  assert.deepEqual(sortRows(a.rows, 'n', 'desc').map(r => r.id).slice(0, 2), ['r1', 'r2']);
-});
 
-test('filter semantics: events, name search, grad year, major (first or second)', () => {
+test('engine scoping semantics (events, name, year, major) used by the individual view', () => {
   const data = fixture();
-  assert.equal(filtersActive(EMPTY_FILTERS), false);
   const ev = buildAnalytics(data, { eventIds: ['e2'] });
   assert.equal(ev.events.length, 1);
   assert.equal(ev.overall.n, 1);
@@ -160,20 +151,8 @@ test('filter semantics: events, name search, grad year, major (first or second)'
   assert.deepEqual(buildAnalytics(data, { majors: ['Accounting'] }).rows.map(r => r.id), ['r1', 'r3']);
   const scoped = buildAnalytics(data, { gradYears: ['2028'] });
   assert.equal(scoped.participation.opportunities, 3 * 2, 'completion denominator follows the recruit filter');
-  const opts = filterOptions(data);
-  assert.deepEqual(opts.gradYears, ['2027', '2028', '']);
-  assert.deepEqual(opts.majors, ['Accounting', 'Finance', 'Marketing']);
 });
 
-test('CSV export is aggregate-only and formula-safe', () => {
-  const data = fixture();
-  data.recruits[0].name = '=HYPERLINK("x")';
-  const csv = rankCsv(buildAnalytics(data).rows);
-  assert.ok(csv.startsWith('rank,tied,name,'));
-  assert.ok(csv.includes(`"'=HYPERLINK(""x"")"`));
-  assert.equal(/@x\.test/.test(csv), false, 'no voter identities');
-  assert.ok(csv.split('\n').find(l => l.includes('Dee')).startsWith(',,Dee,'), 'unrated: no rank');
-});
 
 // Minimal RFC 4180 parser for round-trip checks.
 function parseCsv(text) {
@@ -197,10 +176,10 @@ test('CSV: bare CR, LF, quotes and commas round-trip as one cell', () => {
   for (const name of ['a\rb', 'a\nb', 'a\r\nb', 'say "hi", ok']) {
     const data = fixture();
     data.recruits[0].name = name;
-    const rows = parseCsv(rankCsv(buildAnalytics(data).rows));
+    const rows = parseCsv(recruitCsv(buildRecruitAnalytics(data, 'r1')));
     const header = rows[0];
     assert.ok(rows.slice(1).every(r => r.length === header.length), JSON.stringify(name));
-    assert.ok(rows.some(r => r[header.indexOf('name')] === name), JSON.stringify(name));
+    assert.ok(rows.slice(1).every(r => r[header.indexOf('recruit')] === name), JSON.stringify(name));
   }
   assert.equal(csvCell('a\rb'), '"a\rb"');
 });
@@ -216,4 +195,62 @@ test('CSV: formula prefixes behind spaces, tabs and NBSP are neutralized, data p
   }
   assert.equal(csvCell(null), '');
   assert.equal(csvCell(7), '7');
+});
+
+// ---------- individual recruit view ----------
+
+test('recruit choices: alphabetical, stable IDs, duplicate names disambiguated', () => {
+  const data = fixture();
+  data.recruits.push({ id: 'r5', name: 'ada', gradYear: '2029' }, { id: 'r6xxxxxx', name: 'Ada', gradYear: '2027' });
+  const c = recruitChoices(data);
+  assert.deepEqual(c.map(x => x.id), ['r1', 'r6xxxxxx', 'r5', 'r2', 'r3', 'r4']);
+  assert.equal(c[0].label, 'Ada (Class of 2027) · r1');
+  assert.equal(c[1].label, 'Ada (Class of 2027) · r6xxxx');
+  assert.equal(c[2].label, 'ada (Class of 2029)');
+  assert.equal(c.find(x => x.id === 'r2').label, 'Ben', 'unique names stay plain');
+  assert.equal(new Set(c.map(x => x.label)).size, c.length);
+  assert.deepEqual(recruitChoices({}), []);
+});
+
+test('selection defaults to the first recruit and recovers when the selected one is removed', () => {
+  const c = recruitChoices(fixture());
+  assert.equal(resolveSelection(c, ''), 'r1');
+  assert.equal(resolveSelection(c, 'r3'), 'r3');
+  assert.equal(resolveSelection(c, 'deleted'), 'r1');
+  assert.equal(resolveSelection([], 'r1'), '');
+});
+
+test('two different recruits change every detail and the export scope', () => {
+  const data = fixture();
+  const ada = buildRecruitAnalytics(data, 'r1');
+  const ben = buildRecruitAnalytics(data, 'r2');
+  assert.deepEqual([ada.overall.n, ada.voters, ada.eventsAttended, ada.eventsRated], [4, 3, 2, 2]);
+  near(ada.overall.mean, 7, 'ada mean');
+  near(ada.equalEventMean, 6, 'ada equal-event');
+  assert.deepEqual(ada.perEvent.map(e => [e.name, e.n, e.voters, e.mean]), [['One', 3, 3, 8], ['Two', 1, 1, 4]]);
+  assert.deepEqual([ben.overall.n, ben.voters, ben.eventsAttended, ben.eventsRated, ben.overall.sd], [2, 1, 1, 1, 0]);
+  assert.deepEqual(ben.perEvent.map(e => e.name), ['One'], 'only attended/rated events');
+  assert.deepEqual(ben.overall.histogram, [0, 0, 0, 0, 0, 0, 2, 0, 0, 0]);
+  const adaCsv = recruitCsv(ada);
+  const benCsv = recruitCsv(ben);
+  assert.ok(adaCsv.includes(',Ada,') && !adaCsv.includes('Ben') && !adaCsv.includes(',Cy,'));
+  assert.ok(benCsv.includes(',Ben,') && !benCsv.includes('Ada'));
+  assert.equal(/@x\.test/.test(adaCsv + benCsv), false, 'no voter identities');
+  assert.equal(parseCsv(adaCsv).length, 1 + 1 + 2, 'header + overall + 2 events');
+  assert.equal(JSON.stringify(ada).includes('Ben'), false, 'no other recruit data in the detail');
+});
+
+test('individual view: no ballots, unknown id, invalid rows ignored', () => {
+  const data = fixture();
+  const dee = buildRecruitAnalytics(data, 'r4');
+  assert.equal(dee.overall.n, 0);
+  assert.equal(dee.overall.mean, null);
+  assert.equal(dee.eventsAttended, 1);
+  assert.equal(dee.perEvent.length, 1);
+  assert.equal(buildRecruitAnalytics(data, 'missing'), null);
+  assert.equal(recruitCsv(null), '');
+  // Ada's invalid rows (11, 0, 7.5, true, '', null, missing event) are not counted.
+  assert.equal(buildRecruitAnalytics(data, 'r1').overall.n, 4);
+  const csv = parseCsv(recruitCsv(dee));
+  assert.equal(csv[1][csv[0].indexOf('mean')], '');
 });

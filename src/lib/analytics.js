@@ -1,5 +1,7 @@
-// Results analytics for the admin Analytics tab. Pure functions over the
-// admin snapshot (getAdminData); no I/O, no new permissions, no writes.
+// Results analytics for the admin Analytics tab (one recruit at a time).
+// Pure functions over the admin snapshot (getAdminData); no I/O, no new
+// permissions, no writes. buildAnalytics is the shared engine; the tab only
+// uses buildRecruitAnalytics, which scopes it to a single recruit.
 //
 // Definitions (also shown on the page):
 // - Valid ballot: the canonical tally rule (src/lib/tally.js): integer score
@@ -61,25 +63,6 @@ export function summarize(xs) {
 
 export const EMPTY_FILTERS = Object.freeze({ eventIds: [], search: '', gradYears: [], majors: [] })
 
-export function filtersActive(f) {
-  return !!(f && (f.eventIds.length || f.search.trim() || f.gradYears.length || f.majors.length))
-}
-
-export function filterOptions(data) {
-  const recruits = (data && data.recruits) || []
-  const years = new Set()
-  const majors = new Set()
-  recruits.forEach(r => {
-    years.add(String(r.gradYear || '').trim() || '')
-    ;[r.major, r.secondMajor].forEach(m => { if (String(m || '').trim()) majors.add(String(m).trim()) })
-  })
-  return {
-    events: ((data && data.events) || []).map(e => ({ id: String(e.id), name: e.name })),
-    gradYears: [...years].sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b))),
-    majors: [...majors].sort((a, b) => a.localeCompare(b)),
-  }
-}
-
 function recruitMatches(r, f) {
   if (f.search.trim() && !lower(r.name).includes(lower(f.search))) return false
   if (f.gradYears.length && !f.gradYears.includes(String(r.gradYear || '').trim())) return false
@@ -140,8 +123,8 @@ export function buildAnalytics(data, filters = EMPTY_FILTERS) {
     const scores = mine.map(b => b.score)
     const perEvent = selectedEvents.map(e => {
       const eid = String(e.id)
-      const xs = mine.filter(b => b.eid === eid).map(b => b.score)
-      return { eventId: eid, name: e.name, attended: present.has(key(eid, id)), ...summarize(xs) }
+      const at = mine.filter(b => b.eid === eid)
+      return { eventId: eid, name: e.name, attended: present.has(key(eid, id)), voters: new Set(at.map(b => b.voter)).size, ...summarize(at.map(b => b.score)) }
     })
     const rated = perEvent.filter(p => p.n > 0)
     return {
@@ -205,36 +188,6 @@ export function buildAnalytics(data, filters = EMPTY_FILTERS) {
   }
 }
 
-const SORTS = {
-  rank: r => (r.rank == null ? Infinity : r.rank),
-  name: r => lower(r.name),
-  mean: r => r.overall.mean,
-  median: r => r.overall.median,
-  n: r => r.overall.n,
-  voters: r => r.voters,
-  sd: r => r.overall.sd,
-  range: r => r.overall.range,
-  eventsAttended: r => r.eventsAttended,
-  eventsRated: r => r.eventsRated,
-  equalEventMean: r => r.equalEventMean,
-}
-
-// Missing values (unrated, single ballot SD) always sort last.
-export function sortRows(rows, by = 'rank', dir = 'asc') {
-  const get = SORTS[by] || SORTS.rank
-  const sign = dir === 'desc' ? -1 : 1
-  return rows.slice().sort((a, b) => {
-    const x = get(a)
-    const y = get(b)
-    const xm = x == null || x === Infinity
-    const ym = y == null || y === Infinity
-    if (xm || ym) return xm && ym ? lower(a.name).localeCompare(lower(b.name)) : xm ? 1 : -1
-    if (x < y) return -sign
-    if (x > y) return sign
-    return lower(a.name).localeCompare(lower(b.name))
-  })
-}
-
 export function fmt(x, digits = 2) {
   return x == null || Number.isNaN(x) ? '—' : Number(x).toFixed(digits)
 }
@@ -254,14 +207,69 @@ export function csvCell(v) {
 
 const num = (x, d = 2) => (x == null || Number.isNaN(x) ? '' : Number(x).toFixed(d))
 
-// Aggregates only: no individual ballots or voter identities. Still contains
-// recruits' names, majors, years and scores: private chapter data.
-export function rankCsv(rows) {
-  const head = ['rank', 'tied', 'name', 'gradYear', 'major', 'secondMajor', 'ballots', 'uniqueVoters', 'mean', 'median', 'sd', 'min', 'max', 'eventsAttended', 'eventsRated', 'equalEventMean']
-  const lines = rows.map(r => [
-    r.rank == null ? '' : r.rank, r.tied ? 'yes' : '', r.name, r.gradYear, r.major, r.secondMajor, r.overall.n, r.voters,
-    num(r.overall.mean), num(r.overall.median, 1), num(r.overall.sd), r.overall.min == null ? '' : r.overall.min,
-    r.overall.max == null ? '' : r.overall.max, r.eventsAttended, r.eventsRated, num(r.equalEventMean),
-  ].map(csvCell).join(','))
+// ---------- Individual recruit view (the Analytics tab) ----------
+
+// Alphabetical recruit list for the selector. Option values are the stable
+// recruit IDs. Duplicate names get the class year (or "no year"), and if
+// still ambiguous a short ID suffix, so every label is distinct.
+export function recruitChoices(data) {
+  const recruits = ((data && data.recruits) || []).filter(r => r && r.id != null && String(r.id) !== '')
+  const base = r => String(r.name || '').trim() || 'Unnamed recruit'
+  const withYear = r => base(r) + ' (' + (String(r.gradYear || '').trim() ? 'Class of ' + String(r.gradYear).trim() : 'no year') + ')'
+  const count = (list, fn) => list.reduce((m, r) => { m[fn(r)] = (m[fn(r)] || 0) + 1; return m }, {})
+  const byName = count(recruits, r => lower(base(r)))
+  const byYear = count(recruits, r => lower(withYear(r)))
+  return recruits
+    .map(r => {
+      let label = base(r)
+      if (byName[lower(label)] > 1) label = withYear(r)
+      if (byYear[lower(withYear(r))] > 1) label = withYear(r) + ' · ' + String(r.id).slice(0, 6)
+      return { id: String(r.id), label }
+    })
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }) || a.id.localeCompare(b.id))
+}
+
+// The selected id if it still exists, otherwise the first alphabetical
+// recruit (e.g. after the selected recruit was deleted), or '' when none.
+export function resolveSelection(choices, selectedId) {
+  if (choices.some(c => c.id === String(selectedId))) return String(selectedId)
+  return choices.length ? choices[0].id : ''
+}
+
+// Results for ONE recruit. Only that recruit's ballots feed these numbers;
+// nothing about other recruits is returned.
+export function buildRecruitAnalytics(data, recruitId) {
+  const recruit = ((data && data.recruits) || []).find(r => String(r.id) === String(recruitId))
+  if (!recruit) return null
+  const scoped = { ...data, recruits: [recruit] }
+  const row = buildAnalytics(scoped).rows[0]
+  const attendedOrRated = row.perEvent.filter(e => e.attended || e.n > 0)
+  return {
+    id: row.id,
+    name: row.name,
+    gradYear: row.gradYear,
+    major: row.major,
+    secondMajor: row.secondMajor,
+    overall: row.overall,
+    voters: row.voters,
+    eventsAttended: row.eventsAttended,
+    eventsRated: row.eventsRated,
+    equalEventMean: row.equalEventMean,
+    perEvent: attendedOrRated,
+  }
+}
+
+// CSV for the selected recruit only: one overall row plus one row per
+// attended event. Aggregates only, no voter identities.
+export function recruitCsv(detail) {
+  if (!detail) return ''
+  const head = ['scope', 'recruit', 'gradYear', 'event', 'ballots', 'uniqueVoters', 'mean', 'median', 'sd', 'min', 'max',
+    'score1', 'score2', 'score3', 'score4', 'score5', 'score6', 'score7', 'score8', 'score9', 'score10']
+  const line = (scope, event, s, voters) => [
+    scope, detail.name, detail.gradYear, event, s.n, voters, num(s.mean), num(s.median, 1), num(s.sd),
+    s.min == null ? '' : s.min, s.max == null ? '' : s.max, ...s.histogram,
+  ].map(csvCell).join(',')
+  const lines = [line('overall', '', detail.overall, detail.voters)]
+    .concat(detail.perEvent.map(e => line('event', e.name, e, e.voters)))
   return [head.join(',')].concat(lines).join('\n') + '\n'
 }
