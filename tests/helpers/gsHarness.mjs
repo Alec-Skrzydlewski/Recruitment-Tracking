@@ -29,6 +29,8 @@ function store(value) {
   stats.writes += 1;
   if (typeof value === 'string') {
     if (value.charAt(0) === "'") return value.slice(1);
+    // Real Sheets turns a bare date-looking string into a Date cell.
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return new Date(value + 'T00:00:00Z');
     if (/^[=+\-@]/.test(value)) {
       stats.formulaWrites += 1;
       return { formula: value };
@@ -88,6 +90,8 @@ export function makeSs(seed = {}, headerOverrides = {}, omit = []) {
   return {
     sheets,
     getId() { return 'test-sheet'; },
+    tz: 'America/Denver',
+    getSpreadsheetTimeZone() { return this.tz; },
     getSheetByName(name) { return sheets[name] || null; },
     insertSheet(name) {
       sheets[name] = makeSheet([]);
@@ -249,6 +253,10 @@ const sandbox = {
     createTextOutput(text) { const out = { text, setMimeType() { return out; } }; return out; },
   },
   Utilities: {
+    formatDate(date, tz, pattern) {
+      if (pattern !== 'yyyy-MM-dd') throw new Error('unsupported pattern ' + pattern);
+      return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+    },
     getUuid() { uuidN += 1; return `uuid-${uuidN}`; },
     DigestAlgorithm: { SHA_256: 'sha256' },
     Charset: { UTF_8: 'utf8' },

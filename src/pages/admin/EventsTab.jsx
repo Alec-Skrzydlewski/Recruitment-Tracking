@@ -1,14 +1,17 @@
 import { useState } from 'react'
+import { formatEventDate, isValidEventDate } from '../../lib/eventDate'
 import { EmptyState, SavingPill } from '../../components/ui'
 
 export default function EventsTab({ data, ctl }) {
   const [name, setName] = useState('')
+  const [date, setDate] = useState('')
 
   async function submit(e) {
     e.preventDefault()
     const trimmed = name.trim()
     if (!trimmed) return
-    if (await ctl.addEvent(trimmed)) setName('')
+    const picked = isValidEventDate(date) ? date : ''
+    if (await ctl.addEvent(trimmed, picked)) { setName(''); setDate('') }
   }
 
   const presentSet = new Set(data.attendance.map(a => a.eventId + '::' + a.recruitId))
@@ -17,9 +20,11 @@ export default function EventsTab({ data, ctl }) {
       <form className="card" onSubmit={submit}>
         <label className="field-label" htmlFor="event-name">New event</label>
         <div className="row">
-          <input id="event-name" className="grow" value={name} onChange={e => setName(e.target.value)} required maxLength={120} placeholder="e.g. Info Night" style={{ flex: 1 }} />
+          <input id="event-name" className="grow" value={name} onChange={e => setName(e.target.value)} required maxLength={120} placeholder="e.g. Info Session" style={{ flex: 1 }} />
           <button type="submit" className="btn-primary" disabled={!!ctl.saving['add-event'] || ctl.wiping}>Add event</button>
         </div>
+        <label className="field-label" htmlFor="event-date" style={{ marginTop: 10 }}>Date (optional)</label>
+        <input id="event-date" type="date" min="2000-01-01" max="2100-12-31" value={date} onChange={e => setDate(e.target.value)} />
       </form>
       {data.events.length === 0 ? (
         <EmptyState title="No events yet">Add an event, then check off who attended so members can vote.</EmptyState>
@@ -31,6 +36,7 @@ export default function EventsTab({ data, ctl }) {
             <div className="row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
               <div>
                 <h2 id={'ev-' + ev.id}>{ev.name} {pendingEvent && <SavingPill />}</h2>
+                <p className="small muted event-date">{formatEventDate(ev.date) || 'Date not set'}</p>
                 <div className="small muted">{count} of {data.recruits.length} recruits present</div>
               </div>
               <button type="button" className="icon-btn" onClick={() => ctl.deleteEvent(ev)} disabled={pendingEvent || ctl.wiping} aria-label={'Delete event ' + ev.name} title={'Delete ' + ev.name}>×</button>

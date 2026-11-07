@@ -41,8 +41,8 @@ const members = [
 
 export function demoSeed() {
   const events = [
-    { id: 'e-info', name: 'Info Night' },
-    { id: 'e-case', name: 'Case Competition Social' },
+    { id: 'e-info', name: 'Info Night', date: '2026-09-08' },
+    { id: 'e-case', name: 'Case Competition Social', date: '2026-09-15' },
     { id: 'e-pro', name: 'Professional Night' },
   ];
   const attendance = [
