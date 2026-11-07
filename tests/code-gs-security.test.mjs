@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   api, makeSs, workspace, post, rawPost, token, plain, rowsOf, snapshot, current, configure,
-  stats, cache, fetchLog, driveState, resetDrive, seedPhotoFolder, OWNER, CLIENT_ID,
+  stats, cache, cacheLog, fetchLog, driveState, resetDrive, seedPhotoFolder, addDriveFile, OWNER, CLIENT_ID,
 } from './helpers/gsHarness.mjs';
 
 function fresh(extra) {
@@ -14,6 +14,8 @@ function fresh(extra) {
   current.ss = workspace(extra);
   current.lockFails = false;
   current.tokeninfoDown = false;
+  current.onLock = null;
+  current.lockHeld = false;
   token('owner', OWNER);
   token('member', 'member@example.test');
   token('former', 'former@example.test');
@@ -131,7 +133,7 @@ const ADMIN_ACTIONS = {
   setAttendance: { eventId: 'evt-1', recruitId: 'rec-2', present: true },
   saveNote: { recruitId: 'rec-1', content: 'hi' },
   manageUser: { op: 'add', email: 'z@example.test' },
-  wipeCycle: { confirm: 'WIPE CYCLE', expected: {} },
+  wipeCycle: { confirm: 'WIPE CYCLE', expectedFingerprint: '0'.repeat(64) },
 };
 
 test('authorization matrix: non-members and inactive members reach nothing and write nothing', () => {
@@ -202,7 +204,7 @@ test('castVote: unknown event, unknown recruit and non-attendee are rejected wit
 
 test('castVote after a recruit is removed from attendance is rejected', () => {
   const ss = fresh();
-  assert.equal(api.setAttendance(ss, { eventId: 'evt-1', recruitId: 'rec-1', present: false }).ok, true);
+  assert.equal(api.setAttendance(ss, ADMIN, { eventId: 'evt-1', recruitId: 'rec-1', present: false }).ok, true);
   assert.equal(post('castVote', 'member', { eventId: 'evt-1', recruitId: 'rec-1', score: 4 }).error, 'Invalid vote');
 });
 
@@ -212,9 +214,9 @@ test('formula-leading text is stored as literal text everywhere admins can type'
   const ss = fresh();
   stats.formulaWrites = 0;
   const evil = ['=1+1', '+SUM(A1)', '-2+3', '@cmd', '=HYPERLINK("https://x.example")'];
-  const created = api.addRecruit(ss, { name: evil[0], major: evil[1], secondMajor: evil[2] });
-  api.addEvent(ss, { name: evil[3] });
-  api.saveNote(ss, { recruitId: created.id, content: evil[4] });
+  const created = api.addRecruit(ss, ADMIN, { name: evil[0], major: evil[1], secondMajor: evil[2] });
+  api.addEvent(ss, ADMIN, { name: evil[3] });
+  api.saveNote(ss, ADMIN, { recruitId: created.id, content: evil[4] });
   api.manageUser(ss, { email: OWNER }, { op: 'add', email: 'n@example.test', name: '=cmd|"/c calc"!A0' });
   assert.equal(stats.formulaWrites, 0);
   const read = plain(api.getAdminData(ss));
@@ -306,16 +308,159 @@ test('setAttendance is desired-state: replays do not flip', () => {
   assert.equal(post('setAttendance', 'owner', { eventId: 'evt-1', recruitId: 'rec-2' }).code, 'INVALID');
 });
 
-test('wipeCycle needs the typed confirmation and matching counts; Users survive', () => {
+const fp = () => post('getAdminData', 'owner').cycleFingerprint;
+
+test('wipeCycle needs the typed confirmation and the current cycle fingerprint; Users survive', () => {
   const ss = fresh({ Votes: [['evt-1', 'rec-1', OWNER, 5, 't']] });
-  const expected = { Recruits: 2, Events: 2, EventRecruits: 2, Votes: 1, Notes: 0 };
-  assert.equal(post('wipeCycle', 'owner', { expected }).code, 'INVALID');
-  assert.equal(post('wipeCycle', 'owner', { confirm: 'WIPE CYCLE', expected: { ...expected, Votes: 0 } }).code, 'CONFLICT');
+  const expectedFingerprint = fp();
+  assert.match(expectedFingerprint, /^[0-9a-f]{64}$/);
+  assert.equal(post('wipeCycle', 'owner', { expectedFingerprint }).code, 'INVALID');
+  assert.equal(post('wipeCycle', 'owner', { confirm: 'WIPE CYCLE' }).code, 'INVALID');
+  assert.equal(post('wipeCycle', 'owner', { confirm: 'WIPE CYCLE', expectedFingerprint: 'f'.repeat(64) }).code, 'CONFLICT');
   assert.equal(rowsOf(ss, 'Votes').length, 2);
-  const done = post('wipeCycle', 'owner', { confirm: 'WIPE CYCLE', expected });
+  const done = post('wipeCycle', 'owner', { confirm: 'WIPE CYCLE', expectedFingerprint });
   assert.equal(done.ok, true);
   assert.equal(plain(api.getAdminData(ss)).recruits.length, 0);
   assert.equal(plain(api.getAdminData(ss)).users.length, 3);
+});
+
+test('same-count stale wipe is refused: re-scored vote, edited note, delete+add', () => {
+  const changes = [
+    () => post('castVote', 'owner', { eventId: 'evt-1', recruitId: 'rec-1', score: 2 }),
+    () => post('saveNote', 'owner', { recruitId: 'rec-1', content: 'edited' }),
+    () => { post('deleteEvent', 'owner', { id: 'evt-2' }); post('addEvent', 'owner', { name: 'Case Night' }); },
+  ];
+  for (const change of changes) {
+    const ss = fresh({ Votes: [['evt-1', 'rec-1', OWNER, 5, 't']], Notes: [['rec-1', 'orig', 't']] });
+    const expectedFingerprint = fp();
+    const counts = ['Recruits', 'Events', 'EventRecruits', 'Votes', 'Notes'].map(n => rowsOf(ss, n).length);
+    change();
+    assert.deepEqual(['Recruits', 'Events', 'EventRecruits', 'Votes', 'Notes'].map(n => rowsOf(ss, n).length), counts, 'row counts unchanged');
+    const before = snapshot(ss);
+    assert.equal(post('wipeCycle', 'owner', { confirm: 'WIPE CYCLE', expectedFingerprint }).code, 'CONFLICT');
+    assert.deepEqual(snapshot(ss), before);
+  }
+});
+
+test('a change committed while the wipe waits for the lock is detected', () => {
+  const ss = fresh();
+  const expectedFingerprint = fp();
+  current.onLock = () => { api.saveNote(ss, ADMIN, { recruitId: 'rec-2', content: 'late' }); };
+  assert.equal(post('wipeCycle', 'owner', { confirm: 'WIPE CYCLE', expectedFingerprint }).code, 'CONFLICT');
+  assert.equal(rowsOf(ss, 'Recruits').length, 3);
+});
+
+// ---------- N3: admin authority is re-checked under the write lock ----------
+
+const ADMIN = { email: OWNER };
+const TWO_ADMINS = {
+  Users: [
+    [OWNER, 'Owner', 'admin', 'yes'],
+    ['second@example.test', 'Second', 'admin', 'yes'],
+    ['member@example.test', 'Member', 'brother', 'yes'],
+  ],
+};
+function demoteSecond(ss) {
+  return () => { api.manageUser(ss, ADMIN, { op: 'setRole', email: 'second@example.test', role: 'brother' }); };
+}
+
+test('revocation before the write lock is acquired blocks every admin mutation', () => {
+  const cases = {
+    wipeCycle: () => ({ confirm: 'WIPE CYCLE', expectedFingerprint: fp() }),
+    manageUser: () => ({ op: 'add', email: 'z@example.test' }),
+    deleteRecruit: () => ({ id: 'rec-1' }),
+    deleteEvent: () => ({ id: 'evt-1' }),
+    addRecruit: () => ({ name: 'Zed', major: 'X', photoDataBase64: 'AAAA' }),
+    addEvent: () => ({ name: 'Late' }),
+    setAttendance: () => ({ eventId: 'evt-1', recruitId: 'rec-2', present: true }),
+    saveNote: () => ({ recruitId: 'rec-1', content: 'x' }),
+    uploadPhoto: () => ({ recruitId: 'rec-1', dataBase64: 'AAAA' }),
+    syncPhotoFolder: () => ({}),
+  };
+  for (const [action, body] of Object.entries(cases)) {
+    const ss = fresh(TWO_ADMINS);
+    token('second', 'second@example.test');
+    seedPhotoFolder(ss);
+    const payload = body();
+    current.onLock = demoteSecond(ss);
+    const before = snapshot(ss);
+    const res = post(action, 'second', payload);
+    assert.equal(res.code, 'FORBIDDEN', action);
+    const after = snapshot(ss);
+    // Only the demotion itself (Users role) may differ.
+    for (const name of ['Recruits', 'Events', 'EventRecruits', 'Votes', 'Notes']) {
+      assert.deepEqual(after[name], before[name], action + ' wrote ' + name);
+    }
+    assert.equal(rowsOf(ss, 'Users').length, 4, action);
+  }
+});
+
+test('post-Drive revalidation: link after demotion during Drive work writes nothing', () => {
+  const ss = fresh(TWO_ADMINS);
+  token('second', 'second@example.test');
+  seedPhotoFolder(ss);
+  const fileId = addDriveFile('photos-1', 'Avery Quill.jpg');
+  current.onLock = demoteSecond(ss);
+  const before = snapshot(ss);
+  assert.equal(post('linkPhoto', 'second', { fileId, recruitId: 'rec-1' }).code, 'FORBIDDEN');
+  assert.deepEqual(snapshot(ss).Recruits, before.Recruits);
+});
+
+// ---------- N2: idempotency keyed by action + caller + requestId, under the lock ----------
+
+test('idempotency lookup and store happen while the lock is held, after the re-check', () => {
+  fresh();
+  cacheLog.length = 0;
+  post('addEvent', 'owner', { name: 'Mixer', requestId: 'req-lock' });
+  const gets = cacheLog.filter(e => e[0] === 'get' && e[1].endsWith(':req-lock'));
+  const puts = cacheLog.filter(e => e[0] === 'put');
+  assert.ok(gets.length >= 1 && gets.every(e => e[2] === true));
+  assert.equal(puts.length, 1);
+  assert.equal(puts[0][2], true);
+  assert.equal(puts[0][1], 'req:addEvent:' + OWNER + ':req-lock');
+});
+
+test('concurrent duplicate: a retry that commits while the first waits is replayed, not duplicated', () => {
+  const ss = fresh();
+  // Request B (same id) wins the lock while request A is waiting.
+  let b;
+  current.onLock = () => { b = post('addEvent', 'owner', { name: 'Mixer', requestId: 'req-race' }); };
+  const a = post('addEvent', 'owner', { name: 'Mixer', requestId: 'req-race' });
+  assert.equal(a.id, b.id);
+  assert.equal(rowsOf(ss, 'Events').filter(r => r[1] === 'Mixer').length, 1);
+});
+
+test('cache miss (evicted) re-runs once and is then replayed', () => {
+  const ss = fresh();
+  const a = post('addEvent', 'owner', { name: 'Mixer', requestId: 'req-evict' });
+  cache.clear();
+  const b = post('addEvent', 'owner', { name: 'Mixer', requestId: 'req-evict' });
+  const c = post('addEvent', 'owner', { name: 'Mixer', requestId: 'req-evict' });
+  assert.notEqual(a.id, b.id);
+  assert.equal(b.id, c.id);
+  assert.equal(rowsOf(ss, 'Events').filter(r => r[1] === 'Mixer').length, 2);
+});
+
+test('different actions or different admins sharing a requestId are distinct requests', () => {
+  const ss = fresh(TWO_ADMINS);
+  token('second', 'second@example.test');
+  const e = post('addEvent', 'owner', { name: 'Shared', requestId: 'req-shared' });
+  const r = post('addRecruit', 'owner', { name: 'Shared', major: 'X', requestId: 'req-shared' });
+  const e2 = post('addEvent', 'second', { name: 'Shared', requestId: 'req-shared' });
+  assert.ok(e.id && r.id && e2.id);
+  assert.notEqual(e.id, r.id);
+  assert.notEqual(e.id, e2.id);
+  assert.equal(rowsOf(ss, 'Events').filter(x => x[1] === 'Shared').length, 2);
+  assert.equal(rowsOf(ss, 'Recruits').filter(x => x[1] === 'Shared').length, 1);
+});
+
+test('a cached replay does not bypass a later revocation', () => {
+  const ss = fresh(TWO_ADMINS);
+  token('second', 'second@example.test');
+  const first = post('addEvent', 'second', { name: 'Mixer', requestId: 'req-revoke' });
+  assert.ok(first.id);
+  demoteSecond(ss)();
+  assert.equal(post('addEvent', 'second', { name: 'Mixer', requestId: 'req-revoke' }).code, 'FORBIDDEN');
 });
 
 test('verifyToken binds audience directly', () => {

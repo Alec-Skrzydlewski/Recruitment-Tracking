@@ -112,9 +112,21 @@ Implemented and covered by tests (`tests/code-gs-security.test.mjs`, `tests/code
   token expiry, or an account or runtime switch. Requests time out after
   20 s, and writes are never retried automatically.
 - **Guarded wipe.** The wipe is in **Settings**, not the header. It requires
-  typing `WIPE CYCLE`, and the server refuses it if row counts changed since
-  the admin loaded the page. It is also blocked while other edits are still
-  saving.
+  typing `WIPE CYCLE` and sends a SHA-256 fingerprint of the recruits,
+  events, attendance, votes and notes as last loaded. The server recomputes
+  it under the write lock and refuses on any difference, including same-count
+  edits such as a re-scored vote, an edited note, or a delete plus an add, and
+  the admin's own edits since loading. The page then reloads for review. It is
+  also blocked while other edits are still saving.
+- **Authority re-checked under the lock.** Every admin write re-reads the
+  Users sheet after acquiring the script lock (and after any Drive work), so
+  an admin demoted or removed mid-request cannot complete a write.
+- **Idempotent creates.** Add recruit and add event take a `requestId`. The
+  replay key is action + caller email + request ID and is checked and stored
+  while the lock is held, after the admin re-check, so a cached replay never
+  bypasses a revocation. Known limit: if the cache entry is evicted (10 min),
+  a retry creates a second row; if two identical recruit uploads with a photo
+  race, a duplicate Drive file can be orphaned (the Sheet still gets one row).
 - **HTTP headers** (`vercel.json`, tested in `tests/headers.test.mjs`):
   - The CSP allows only `self`, the Google Identity Services endpoints, and
     Apps Script, with no `unsafe-inline` or `unsafe-eval`.
@@ -155,8 +167,9 @@ Six sheets. Columns are located by header name; extra columns are allowed.
 
 - Attendance is sent as the desired state (`present: true/false`), so a
   replayed request can't flip it back.
-- Creating a recruit or event carries a `requestId`. A replay within 10
-  minutes returns the first result instead of adding a second row.
+- Creating a recruit or event carries a `requestId`. A replay of the same
+  action by the same admin within 10 minutes returns the first result instead
+  of adding a second row (see *Idempotent creates* above for the limits).
 - In the voting UI, writes for each recruit run one at a time and the last
   tap wins.
 
@@ -240,8 +253,12 @@ version **2**.
 4. Rollback: redeploy the previous Apps Script version together with the
    previous frontend build.
 
-Merging this repository does not deploy anything. The Apps Script code is
-deployed by hand as described above.
+The Apps Script backend is deployed by hand as described above; nothing in
+this repository's CI deploys it. The frontend is different: the repository
+is connected to Vercel, which has created a **Production** deployment for
+past commits on `main` and **Preview** deployments for branch pushes (per
+GitHub deployment records). Assume merging to `main` deploys the production
+frontend, so deploy and verify the backend (step 1) before merging.
 
 ## Testing and CI
 
@@ -249,7 +266,7 @@ deployed by hand as described above.
 
 | Suite | Covers |
 | --- | --- |
-| `code-gs-security.test.mjs` | Token audience, issuer and expiry; fail-closed config; owner-only bootstrap and setup; the full authorization matrix; vote membership, existence and attendance checks; formula-text writes; reordered and duplicate headers; sanitized Drive errors; idempotent creates; desired-state attendance; the wipe guard |
+| `code-gs-security.test.mjs` | Token audience, issuer and expiry; fail-closed config; owner-only bootstrap and setup; the full authorization matrix; vote membership, existence and attendance checks; formula-text writes; reordered and duplicate headers; sanitized Drive errors; idempotency keyed by action, caller and request ID under the lock (concurrent, evicted and cross-action replays); admin revocation before the write lock (incl. after Drive work); desired-state attendance; the content-fingerprint wipe guard including same-count stale changes |
 | `code-gs.test.mjs` | Parity with the original behavior: vote upsert and dedupe, user management guards, schema setup, photo upload, sync, link and folder rules |
 | `ui-flows.test.mjs` | Real React pages in jsdom against the demo backend: persona flow, vote save, rollback and retry, note-failure draft retention, wipe guard, reset. `fetch`, XHR, WebSocket, beacons and script injection are tripwires, and the tests assert zero network use. The unconfigured live app fails closed. |
 | `frontend-libs`, `demo-backend`, `api`, `headers`, … | Tally rules, the write queue, the photo cache, transport errors and timeouts, demo-rule parity, and the CSP |

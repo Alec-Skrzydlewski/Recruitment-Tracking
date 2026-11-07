@@ -28,7 +28,7 @@ export default function SettingsTab({ data, ctl }) {
         <h2 id="wipe-title">End of cycle: wipe data</h2>
         <p className="small muted" style={{ margin: '6px 0 12px' }}>
           Clears {data.recruits.length} recruits, {data.events.length} events, {data.attendance.length} attendance marks, {data.votes.length} votes and {data.notes.length} notes.
-          Members and Drive photos are kept. If anyone changes data before you confirm, the wipe is refused.
+          Members and Drive photos are kept. If any recruits, events, attendance, votes or notes changed since this page loaded, including your own edits, nothing is wiped and the page reloads so you can review and confirm again.
         </p>
         <label className="field-label" htmlFor="wipe-confirm">Type <span className="kbd">{PHRASE}</span> to confirm</label>
         <input id="wipe-confirm" value={typed} onChange={e => setTyped(e.target.value)} autoComplete="off" spellCheck={false} />

@@ -97,17 +97,17 @@ function dispatch(ss, user, config, action, body) {
     requireAdmin(ss, user);
     switch (action) {
       case 'getAdminData': return getAdminData(ss);
-      case 'addRecruit': return addRecruit(ss, body);
-      case 'deleteRecruit': return deleteRecruit(ss, body);
-      case 'uploadPhoto': return uploadPhoto(ss, body);
-      case 'syncPhotoFolder': return syncPhotoFolder(ss);
-      case 'linkPhoto': return linkPhoto(ss, body);
-      case 'addEvent': return addEvent(ss, body);
-      case 'deleteEvent': return deleteEvent(ss, body);
-      case 'setAttendance': return setAttendance(ss, body);
-      case 'saveNote': return saveNote(ss, body);
+      case 'addRecruit': return addRecruit(ss, user, body);
+      case 'deleteRecruit': return deleteRecruit(ss, user, body);
+      case 'uploadPhoto': return uploadPhoto(ss, user, body);
+      case 'syncPhotoFolder': return syncPhotoFolder(ss, user);
+      case 'linkPhoto': return linkPhoto(ss, user, body);
+      case 'addEvent': return addEvent(ss, user, body);
+      case 'deleteEvent': return deleteEvent(ss, user, body);
+      case 'setAttendance': return setAttendance(ss, user, body);
+      case 'saveNote': return saveNote(ss, user, body);
       case 'manageUser': return manageUser(ss, user, body);
-      case 'wipeCycle': return wipeCycle(ss, body);
+      case 'wipeCycle': return wipeCycle(ss, user, body);
     }
   }
   return errorResult('UNKNOWN_ACTION', 'Unknown action');
@@ -343,17 +343,43 @@ function withLock(fn) {
   }
 }
 
-// Optional idempotency for creates: the client sends a requestId and a replay
-// of the same request returns the first result instead of a second row.
-function idempotent(requestId, fn) {
+// Every admin mutation runs inside ONE script lock that first re-reads the
+// Users sheet, so an admin demoted or removed while a request was in flight
+// (or waiting for the lock) cannot complete the write. Apps Script locks are
+// not reentrant: never call withLock/withAdminLock from inside either.
+function withAdminLock(ss, user, fn) {
+  return withLock(() => {
+    const me = findActiveUser(tableRows(readTable(ss, 'Users')), user && user.email);
+    if (!me || me.role !== 'admin') throw appError('FORBIDDEN', 'Admin only');
+    return fn(me);
+  });
+}
+
+// Idempotency for creates. The key binds action + canonical caller email +
+// requestId, so one id reused for a different action or by a different admin
+// is a different request. idempotentLocked must be called inside
+// withAdminLock: the lookup and the store happen while the lock is held (two
+// concurrent requests cannot both miss and create twice) and only after the
+// caller's admin role was re-checked (a replay cannot bypass a revocation).
+// Without CacheService or a valid requestId the call simply runs once.
+function requestCacheKey(action, user, requestId) {
   const id = validId(requestId);
-  const cache = id && typeof CacheService !== 'undefined' ? CacheService.getScriptCache() : null;
-  if (cache) {
-    const hit = cache.get('req:' + id);
-    if (hit) return JSON.parse(hit);
-  }
+  const email = normalizeEmail(user && user.email);
+  if (!id || !email || typeof CacheService === 'undefined') return '';
+  return 'req:' + action + ':' + email + ':' + id;
+}
+
+function cachedResult(key) {
+  if (!key) return null;
+  const hit = CacheService.getScriptCache().get(key);
+  return hit ? JSON.parse(hit) : null;
+}
+
+function idempotentLocked(key, fn) {
+  const hit = cachedResult(key);
+  if (hit) return hit;
   const result = fn();
-  if (cache && result && !result.error) cache.put('req:' + id, JSON.stringify(result), 600);
+  if (key && result && !result.error) CacheService.getScriptCache().put(key, JSON.stringify(result), 600);
   return result;
 }
 
@@ -471,7 +497,7 @@ function manageUser(ss, user, body) {
     const role = body.role == null ? 'brother' : String(body.role);
     if (ROLES.indexOf(role) === -1) return errorResult('INVALID', 'Invalid role');
     const name = requireText(body.name, LIMITS.name, 'Name', false) || email;
-    return withLock(() => {
+    return withAdminLock(ss, user, () => {
       const table = readTable(ss, 'Users');
       if (findRows(table, row => emailsEqual(row.email, email)).length) return errorResult('CONFLICT', 'User already exists');
       appendObject(table, { email: email, name: name, role: role, active: 'yes' });
@@ -480,7 +506,7 @@ function manageUser(ss, user, body) {
   }
   if (op === 'remove') {
     if (email === actor) return errorResult('FORBIDDEN', 'You cannot remove yourself');
-    return withLock(() => {
+    return withAdminLock(ss, user, () => {
       const table = readTable(ss, 'Users');
       const admins = activeAdminEmails(tableRows(table));
       if (admins.length === 1 && admins[0] === email) return errorResult('FORBIDDEN', 'Cannot remove the last admin');
@@ -491,7 +517,7 @@ function manageUser(ss, user, body) {
   if (op === 'setRole') {
     const role = String(body.role || '');
     if (ROLES.indexOf(role) === -1) return errorResult('INVALID', 'Invalid role');
-    return withLock(() => {
+    return withAdminLock(ss, user, () => {
       const table = readTable(ss, 'Users');
       const admins = activeAdminEmails(tableRows(table));
       if (role !== 'admin' && admins.length === 1 && admins[0] === email) {
@@ -521,13 +547,17 @@ function getVoteData(ss, me) {
 }
 
 function getAdminData(ss) {
+  const tables = readCycleTables(ss);
+  const byName = {};
+  tables.forEach(t => { byName[t.name] = tableRows(t); });
   return {
     schemaVersion: SCHEMA_VERSION,
-    recruits: tableRows(readTable(ss, 'Recruits')),
-    events: tableRows(readTable(ss, 'Events')),
-    attendance: tableRows(readTable(ss, 'EventRecruits')),
-    votes: tableRows(readTable(ss, 'Votes')),
-    notes: tableRows(readTable(ss, 'Notes')),
+    cycleFingerprint: cycleFingerprint(tables),
+    recruits: byName.Recruits,
+    events: byName.Events,
+    attendance: byName.EventRecruits,
+    votes: byName.Votes,
+    notes: byName.Notes,
     users: tableRows(readTable(ss, 'Users')).map(u => ({
       email: String(u.email).trim().toLowerCase(), name: u.name, role: u.role, active: u.active,
     })),
@@ -590,54 +620,55 @@ function recruitFields(source) {
   };
 }
 
-function addRecruit(ss, body) {
+function addRecruit(ss, user, body) {
   const source = body || {};
   const fields = recruitFields(source);
   if (fields.secondMajor && fields.secondMajor.toLowerCase() === fields.major.toLowerCase()) {
     return errorResult('INVALID', 'Second major must be different from the major.');
   }
-  return idempotent(source.requestId, () => {
-    // Drive writes happen before (outside) the Sheet lock.
-    let photoFileId = '';
-    const rawPhoto = source.photoDataBase64;
-    if (rawPhoto != null && String(rawPhoto).trim() !== '') {
-      photoFileId = savePhotoFile(ss, fields.name, decodePhoto(rawPhoto));
-    }
-    return withLock(() => {
-      const table = readTable(ss, 'Recruits');
-      const id = Utilities.getUuid();
-      appendObject(table, {
-        id: id, name: fields.name, major: fields.major, secondMajor: fields.secondMajor, gradYear: fields.gradYear,
-        photoFileId: photoFileId, photoSource: photoFileId ? 'upload' : '',
-      });
-      const result = { id: id };
-      if (photoFileId) {
-        result.photoFileId = photoFileId;
-        result.photoSource = 'upload';
-      }
-      return result;
+  const key = requestCacheKey('addRecruit', user, source.requestId);
+  // Drive writes happen outside the Sheet lock. A cache hit seen here only
+  // skips a duplicate Drive upload; the authoritative check is under the lock.
+  let photoFileId = '';
+  const rawPhoto = source.photoDataBase64;
+  if (!cachedResult(key) && rawPhoto != null && String(rawPhoto).trim() !== '') {
+    photoFileId = savePhotoFile(ss, fields.name, decodePhoto(rawPhoto));
+  }
+  return withAdminLock(ss, user, () => idempotentLocked(key, () => {
+    const table = readTable(ss, 'Recruits');
+    const id = Utilities.getUuid();
+    appendObject(table, {
+      id: id, name: fields.name, major: fields.major, secondMajor: fields.secondMajor, gradYear: fields.gradYear,
+      photoFileId: photoFileId, photoSource: photoFileId ? 'upload' : '',
     });
-  });
+    const result = { id: id };
+    if (photoFileId) {
+      result.photoFileId = photoFileId;
+      result.photoSource = 'upload';
+    }
+    return result;
+  }));
 }
 
 // Deleting a recruit or event removes only that row. Votes, notes and
 // attendance that reference it are kept as history and excluded from active
 // tallies (see src/lib/tally.js), so a mistaken delete never destroys scores.
-function deleteById(ss, sheetName, body) {
+function deleteById(ss, user, sheetName, body) {
   const id = requireId(body && body.id, 'id');
-  return withLock(() => {
+  return withAdminLock(ss, user, () => {
     const table = readTable(ss, sheetName);
     deleteRowIndexes(table, findRows(table, row => String(row.id) === id));
     return { ok: true };
   });
 }
 
-function deleteRecruit(ss, body) { return deleteById(ss, 'Recruits', body); }
-function deleteEvent(ss, body) { return deleteById(ss, 'Events', body); }
+function deleteRecruit(ss, user, body) { return deleteById(ss, user, 'Recruits', body); }
+function deleteEvent(ss, user, body) { return deleteById(ss, user, 'Events', body); }
 
-function addEvent(ss, body) {
+function addEvent(ss, user, body) {
   const name = requireText(body && body.name, LIMITS.name, 'Event name', true);
-  return idempotent(body && body.requestId, () => withLock(() => {
+  const key = requestCacheKey('addEvent', user, body && body.requestId);
+  return withAdminLock(ss, user, () => idempotentLocked(key, () => {
     const table = readTable(ss, 'Events');
     const id = Utilities.getUuid();
     appendObject(table, { id: id, name: name });
@@ -647,11 +678,11 @@ function addEvent(ss, body) {
 
 // Desired-state attendance: replaying the same request is harmless, unlike a
 // toggle that flips back on a retry.
-function setAttendance(ss, body) {
+function setAttendance(ss, user, body) {
   const eventId = requireId(body && body.eventId, 'event');
   const recruitId = requireId(body && body.recruitId, 'recruit');
   if (typeof body.present !== 'boolean') return errorResult('INVALID', 'Invalid attendance');
-  return withLock(() => {
+  return withAdminLock(ss, user, () => {
     if (!idExists(readTable(ss, 'Events'), eventId)) return errorResult('NOT_FOUND', 'Event not found');
     if (!idExists(readTable(ss, 'Recruits'), recruitId)) return errorResult('NOT_FOUND', 'Recruit not found');
     const table = readTable(ss, 'EventRecruits');
@@ -663,10 +694,10 @@ function setAttendance(ss, body) {
   });
 }
 
-function saveNote(ss, body) {
+function saveNote(ss, user, body) {
   const recruitId = requireId(body && body.recruitId, 'recruit');
   const content = requireText(body && body.content, LIMITS.note, 'Note', false);
-  return withLock(() => {
+  return withAdminLock(ss, user, () => {
     if (!idExists(readTable(ss, 'Recruits'), recruitId)) return errorResult('NOT_FOUND', 'Recruit not found');
     const table = readTable(ss, 'Notes');
     const updatedAt = new Date().toISOString();
@@ -677,21 +708,45 @@ function saveNote(ss, body) {
   });
 }
 
-// Wipe requires a typed confirmation and the counts the admin saw. If anyone
-// added data since then, the counts differ and nothing is cleared.
+// ---------- cycle fingerprint and wipe ----------
+
 const WIPE_CONFIRMATION = 'WIPE CYCLE';
 const WIPE_SHEETS = ['Recruits', 'Events', 'EventRecruits', 'Votes', 'Notes'];
 
-function wipeCycle(ss, body) {
+function canonicalCell(value) {
+  if (value instanceof Date || (value && typeof value.toISOString === 'function')) return value.toISOString();
+  return value === null || value === undefined ? '' : String(value);
+}
+
+// SHA-256 over the canonical content of every cycle sheet: schema columns in
+// schema order, rows in sheet order, values as text. ANY change to cycle data
+// changes it, including a re-scored vote, an edited note, or a delete plus an
+// add that leaves row counts unchanged.
+function cycleFingerprint(tables) {
+  const canonical = tables.map(t => [t.name, tableRows(t).map(row => SCHEMA[t.name].map(k => canonicalCell(row[k])))]);
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, JSON.stringify(canonical), Utilities.Charset.UTF_8);
+  return bytes.map(b => ((b + 256) % 256).toString(16).padStart(2, '0')).join('');
+}
+
+function readCycleTables(ss) {
+  return WIPE_SHEETS.map(name => readTable(ss, name));
+}
+
+// Wipe requires the typed confirmation and the fingerprint of the data the
+// admin was looking at. If anything in the cycle sheets changed since then
+// (by anyone, including the admin's own later edits), nothing is cleared.
+function wipeCycle(ss, user, body) {
   if (!body || body.confirm !== WIPE_CONFIRMATION) return errorResult('INVALID', 'Type ' + WIPE_CONFIRMATION + ' to confirm.');
-  const expected = body.expected || {};
-  return withLock(() => {
-    const tables = WIPE_SHEETS.map(name => readTable(ss, name));
+  const expected = String(body.expectedFingerprint || '');
+  if (!/^[0-9a-f]{64}$/.test(expected)) return errorResult('INVALID', 'Reload the page before wiping.');
+  return withAdminLock(ss, user, () => {
+    const tables = readCycleTables(ss);
+    if (cycleFingerprint(tables) !== expected) {
+      return errorResult('CONFLICT', 'Cycle data changed since this page loaded. Reload and review before wiping.');
+    }
     const counts = {};
-    tables.forEach(t => { counts[t.name] = tableRows(t).length; });
-    const changed = WIPE_SHEETS.some(name => Number(expected[name]) !== counts[name]);
-    if (changed) return errorResult('CONFLICT', 'Data changed since you opened this page. Reload and try again.');
     tables.forEach(t => {
+      counts[t.name] = tableRows(t).length;
       const last = t.sheet.getLastRow();
       if (last > 1) t.sheet.getRange(2, 1, last - 1, Math.max(t.sheet.getLastColumn(), 1)).clearContent();
     });
@@ -962,13 +1017,13 @@ function findRecruit(table, recruitId) {
   return { r: hits[0], name: textField(row.name), photoFileId: textField(row.photoFileId), photoSource: textField(row.photoSource) };
 }
 
-function uploadPhoto(ss, body) {
+function uploadPhoto(ss, user, body) {
   const recruitId = requireId(body && body.recruitId, 'recruit');
   const bytes = decodePhoto(body && body.dataBase64);
   const before = findRecruit(readTable(ss, 'Recruits'), recruitId);
   if (!before) return errorResult('NOT_FOUND', 'Recruit not found');
   const fileId = savePhotoFile(ss, before.name, bytes);
-  return withLock(() => {
+  return withAdminLock(ss, user, () => {
     const table = readTable(ss, 'Recruits');
     const located = findRecruit(table, recruitId);
     if (!located) return errorResult('NOT_FOUND', 'Recruit not found');
@@ -1047,11 +1102,11 @@ function getPhotos(ss, me, body) {
 // Folder listing and fuzzy matching run OUTSIDE the lock so votes are never
 // blocked by Drive. The write phase re-reads Recruits under the lock and only
 // links rows that still exist and still have no photo.
-function syncPhotoFolder(ss) {
+function syncPhotoFolder(ss, user) {
   const folder = getPhotoFolder(ss, true);
   const files = listImageFiles(folder);
   const plan = planPhotoLinks(files, tableRows(readTable(ss, 'Recruits')));
-  return withLock(() => {
+  return withAdminLock(ss, user, () => {
     const table = readTable(ss, 'Recruits');
     const taken = {};
     tableRows(table).forEach(r => { if (textField(r.photoFileId)) taken[textField(r.photoFileId)] = true; });
@@ -1067,14 +1122,14 @@ function syncPhotoFolder(ss) {
   });
 }
 
-function linkPhoto(ss, body) {
+function linkPhoto(ss, user, body) {
   const fileId = validId(body && body.fileId);
   const recruitId = validId(body && body.recruitId);
   if (!fileId || !recruitId) return errorResult('INVALID', 'Missing photo link');
   const folder = getPhotoFolder(ss, false);
   const file = openDriveFile(fileId);
   if (!fileInPhotoFolder(file, folder)) return errorResult('INVALID', 'Photo is not in the Recruit Photos folder');
-  return withLock(() => {
+  return withAdminLock(ss, user, () => {
     const table = readTable(ss, 'Recruits');
     const located = findRecruit(table, recruitId);
     if (!located) return errorResult('NOT_FOUND', 'Recruit not found');

@@ -2,6 +2,7 @@
 // in-memory mock; nothing here can reach a real Sheet, Drive or Google API.
 import fs from 'node:fs';
 import vm from 'node:vm';
+import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -100,7 +101,8 @@ export const lockLog = [];
 export const fetchLog = [];
 export const cache = new Map();
 export const props = {};
-export let current = { ss: null, lockFails: false, tokeninfoDown: false };
+export const current = { ss: null, lockFails: false, tokeninfoDown: false, lockHeld: false, onLock: null };
+export const cacheLog = [];
 
 export const driveState = {
   files: {}, folders: {}, blobReads: 0, fileLookups: 0, getFilesCalls: 0,
@@ -210,9 +212,15 @@ const sandbox = {
       return {
         waitLock(ms) {
           if (current.lockFails) throw new Error('Lock timeout: another process was holding the lock');
+          if (current.lockHeld) throw new Error('nested lock: Apps Script locks are not reentrant');
+          // Hook runs "while waiting": simulates another request committing first.
+          const hook = current.onLock;
+          current.onLock = null;
+          if (hook) hook();
+          current.lockHeld = true;
           lockLog.push(['wait', ms]);
         },
-        releaseLock() { lockLog.push(['release']); },
+        releaseLock() { current.lockHeld = false; lockLog.push(['release']); },
       };
     },
   },
@@ -231,8 +239,8 @@ const sandbox = {
   CacheService: {
     getScriptCache() {
       return {
-        get(key) { const v = cache.has(key) ? cache.get(key) : null; if (v) stats.cacheHits += 1; return v; },
-        put(key, value) { cache.set(key, value); },
+        get(key) { cacheLog.push(['get', key, current.lockHeld]); const v = cache.has(key) ? cache.get(key) : null; if (v) stats.cacheHits += 1; return v; },
+        put(key, value) { cacheLog.push(['put', key, current.lockHeld]); cache.set(key, value); },
       };
     },
   },
@@ -242,6 +250,11 @@ const sandbox = {
   },
   Utilities: {
     getUuid() { uuidN += 1; return `uuid-${uuidN}`; },
+    DigestAlgorithm: { SHA_256: 'sha256' },
+    Charset: { UTF_8: 'utf8' },
+    computeDigest(alg, value) {
+      return Array.from(crypto.createHash(alg).update(String(value), 'utf8').digest()).map(b => (b > 127 ? b - 256 : b));
+    },
     newBlob(data, mime, name) { return { getBytes() { return data; }, getContentType() { return mime; }, getName() { return name; } }; },
     base64Decode(value) { return Array.from(Buffer.from(String(value), 'base64')); },
     base64Encode(bytes) { return Buffer.from(bytes).toString('base64'); },

@@ -15,14 +15,14 @@ test('loading Code.gs does not touch SpreadsheetApp', () => {
 
 test('notes with only recruitId read back and saveNote upserts by name-indexed columns', () => {
   const ss = workspace({ Notes: [['', '', ''], ['rec-1', 'Asked good questions', '2026-01-01']] });
-  const saved = api.saveNote(ss, { recruitId: 'rec-2', content: 'Follow up Monday' });
+  const saved = api.saveNote(ss, ADMIN, { recruitId: 'rec-2', content: 'Follow up Monday' });
   assert.equal(saved.ok, true);
   const notes = plain(api.getAdminData(ss).notes);
   assert.equal(notes.length, 2);
   assert.equal(notes.find(n => n.recruitId === 'rec-2').content, 'Follow up Monday');
-  api.saveNote(ss, { recruitId: 'rec-1', content: 'Updated' });
+  api.saveNote(ss, ADMIN, { recruitId: 'rec-1', content: 'Updated' });
   assert.equal(plain(api.getAdminData(ss).notes).find(n => n.recruitId === 'rec-1').content, 'Updated');
-  const missing = api.saveNote(ss, { recruitId: 'rec-404', content: 'x' });
+  const missing = api.saveNote(ss, ADMIN, { recruitId: 'rec-404', content: 'x' });
   assert.equal(missing.code, 'NOT_FOUND');
 });
 
@@ -64,7 +64,8 @@ test('manageUser add rejects an existing email, validates input and role', () =>
 test('manageUser refuses self-removal and protects the last active admin', () => {
   const ss = workspace();
   assert.equal(api.manageUser(ss, { email: 'Owner@example.test' }, { op: 'remove', email: OWNER }).error, 'You cannot remove yourself');
-  assert.equal(api.manageUser(ss, { email: 'member@example.test' }, { op: 'remove', email: OWNER }).error, 'Cannot remove the last admin');
+  // A non-admin calling the handler directly is refused under the lock (N3).
+  assert.throws(() => api.manageUser(ss, { email: 'member@example.test' }, { op: 'remove', email: OWNER }), /Admin only/);
   assert.equal(api.manageUser(ss, ADMIN, { op: 'setRole', email: OWNER, role: 'brother' }).error, 'Cannot demote the last admin');
   assert.equal(rowsOf(ss, 'Users')[1][2], 'admin');
   assert.equal(api.manageUser(ss, ADMIN, { op: 'setRole', email: 'member@example.test', role: 'admin' }).ok, true);
@@ -110,15 +111,15 @@ test('setupSchema creates every missing sheet with the current header', () => {
 
 test('addRecruit writes trimmed fields by header name, including reordered headers', () => {
   const ss = workspace();
-  const created = api.addRecruit(ss, { name: '  Casey Lark ', major: ' Finance (BSBA) ', secondMajor: ' Economics (BA) ', gradYear: ' 2027 ' });
+  const created = api.addRecruit(ss, ADMIN, { name: '  Casey Lark ', major: ' Finance (BSBA) ', secondMajor: ' Economics (BA) ', gradYear: ' 2027 ' });
   const values = rowsOf(ss, 'Recruits');
   assert.deepEqual(values[3], [created.id, 'Casey Lark', 'Finance (BSBA)', 'Economics (BA)', '2027', '', '']);
 
   const shifted = makeSs(
-    { Recruits: [['Dana', 'r1', 'Finance (BSBA)']] },
+    { Users: [[OWNER, 'Owner', 'admin', 'yes']], Recruits: [['Dana', 'r1', 'Finance (BSBA)']] },
     { Recruits: ['name', 'id', 'major', 'secondMajor', 'gradYear', 'photoFileId', 'photoSource', 'legacy'] },
   );
-  const extra = api.addRecruit(shifted, { name: 'Cyd', major: 'Marketing (BSBA)', gradYear: '2030' });
+  const extra = api.addRecruit(shifted, ADMIN, { name: 'Cyd', major: 'Marketing (BSBA)', gradYear: '2030' });
   assert.deepEqual(rowsOf(shifted, 'Recruits')[2], ['Cyd', extra.id, 'Marketing (BSBA)', '', '2030', '', '', '']);
   const read = plain(api.getAdminData(shifted).recruits);
   assert.equal(read.find(r => r.id === 'r1').name, 'Dana');
@@ -127,28 +128,28 @@ test('addRecruit writes trimmed fields by header name, including reordered heade
 test('addRecruit rejects invalid fields without writing', () => {
   const ss = workspace();
   const before = rowsOf(ss, 'Recruits');
-  assert.throws(() => api.addRecruit(ss, { name: '', major: 'X' }), /Name is required/);
-  assert.throws(() => api.addRecruit(ss, { name: 'A', major: '' }), /Major is required/);
-  assert.throws(() => api.addRecruit(ss, { name: 'A'.repeat(121), major: 'X' }), /too long/);
-  assert.throws(() => api.addRecruit(ss, { name: 'A', major: 'X', gradYear: '27' }), /4-digit/);
-  assert.equal(api.addRecruit(ss, { name: 'A', major: 'Finance', secondMajor: 'finance' }).code, 'INVALID');
+  assert.throws(() => api.addRecruit(ss, ADMIN, { name: '', major: 'X' }), /Name is required/);
+  assert.throws(() => api.addRecruit(ss, ADMIN, { name: 'A', major: '' }), /Major is required/);
+  assert.throws(() => api.addRecruit(ss, ADMIN, { name: 'A'.repeat(121), major: 'X' }), /too long/);
+  assert.throws(() => api.addRecruit(ss, ADMIN, { name: 'A', major: 'X', gradYear: '27' }), /4-digit/);
+  assert.equal(api.addRecruit(ss, ADMIN, { name: 'A', major: 'Finance', secondMajor: 'finance' }).code, 'INVALID');
   assert.deepEqual(rowsOf(ss, 'Recruits'), before);
 });
 
 test('addRecruit stores an optional upload and deleteRecruit leaves the Drive file', () => {
   resetDrive();
   const ss = workspace();
-  const created = api.addRecruit(ss, { name: 'Grace/Hopper', major: 'Marketing (BSBA)', gradYear: '2028', photoDataBase64: Buffer.from('photo').toString('base64') });
+  const created = api.addRecruit(ss, ADMIN, { name: 'Grace/Hopper', major: 'Marketing (BSBA)', gradYear: '2028', photoDataBase64: Buffer.from('photo').toString('base64') });
   assert.equal(created.photoSource, 'upload');
   const file = driveState.files[created.photoFileId];
   assert.equal(file.name, 'Grace Hopper.jpg');
   assert.equal(Buffer.from(file.bytes).toString(), 'photo');
   assert.equal(driveState.sharingCalls, 0);
-  api.deleteRecruit(ss, { id: created.id });
+  api.deleteRecruit(ss, ADMIN, { id: created.id });
   assert.equal(rowsOf(ss, 'Recruits').length, 3);
   assert.ok(driveState.files[created.photoFileId]);
   assert.equal(driveState.trashCalls, 0);
-  assert.throws(() => api.addRecruit(ss, { name: 'Big', major: 'X', photoDataBase64: 'a'.repeat(500001) }), /too large/);
+  assert.throws(() => api.addRecruit(ss, ADMIN, { name: 'Big', major: 'X', photoDataBase64: 'a'.repeat(500001) }), /too large/);
   assert.equal(rowsOf(ss, 'Recruits').length, 3);
 });
 
@@ -156,10 +157,10 @@ test('uploadPhoto is admin-only and getPhotos will not read arbitrary files', ()
   seedPhotoFolder();
   const ss = workspace();
   const payload = Buffer.from('avery-photo').toString('base64');
-  const uploaded = api.uploadPhoto(ss, { recruitId: 'rec-1', dataBase64: payload });
+  const uploaded = api.uploadPhoto(ss, ADMIN, { recruitId: 'rec-1', dataBase64: payload });
   assert.equal(uploaded.photoSource, 'upload');
   assert.equal(driveState.files[uploaded.photoFileId].name, 'Avery Quill.jpg');
-  assert.equal(api.uploadPhoto(ss, { recruitId: 'nope', dataBase64: payload }).error, 'Recruit not found');
+  assert.equal(api.uploadPhoto(ss, ADMIN, { recruitId: 'nope', dataBase64: payload }).error, 'Recruit not found');
 
   const loose = addDriveFile('photos-1', 'mystery.png', 'image/png', [9, 8, 7]);
   driveState.files.outside = { id: 'outside', name: 'secret.png', mime: 'image/png', bytes: [5], parentIds: ['parent-2'] };
@@ -205,7 +206,7 @@ test('syncPhotoFolder auto-links a clear typo, reviews Smith versus Smyth, and s
   folder.fileIds.push('keep-me');
   driveState.blobReads = 0;
   driveState.getFilesCalls = 0;
-  const first = plain(api.syncPhotoFolder(ss));
+  const first = plain(api.syncPhotoFolder(ss, ADMIN));
   assert.equal(driveState.blobReads, 0);
   assert.equal(driveState.getFilesCalls, 1);
   assert.equal(first.linked.length, 0);
@@ -217,13 +218,13 @@ test('syncPhotoFolder auto-links a clear typo, reviews Smith versus Smyth, and s
   const clearFolder = seedPhotoFolder();
   const clear = workspace({ Recruits: [['r-jane', 'Jane Smith', 'Finance (BSBA)', '', '2027', '', '']] });
   const typoId = addDriveFile(clearFolder.id, 'Jane Smtih.jpg');
-  const linked = plain(api.syncPhotoFolder(clear));
+  const linked = plain(api.syncPhotoFolder(clear, ADMIN));
   assert.equal(linked.linked.length, 1);
   assert.equal(linked.linked[0].fileId, typoId);
   const jane = rowsOf(clear, 'Recruits')[1];
   assert.equal(jane[5], typoId);
   assert.equal(jane[6], 'folder');
-  const again = api.syncPhotoFolder(clear);
+  const again = api.syncPhotoFolder(clear, ADMIN);
   assert.equal(again.linked.length, 0);
   assert.equal(driveState.createFolderCalls, 0);
 });
@@ -235,11 +236,11 @@ test('linkPhoto attaches a folder image and refuses files outside it or recruits
     ['r-ada', 'Ada Lovelace', 'Finance (BSBA)', '', '2027', 'old', 'upload'],
   ] });
   const fileId = addDriveFile(folder.id, 'portrait.png', 'image/png', [3, 3]);
-  assert.deepEqual(plain(api.linkPhoto(ss, { fileId, recruitId: 'r-jane' })), { ok: true, photoFileId: fileId, photoSource: 'folder' });
-  assert.equal(api.linkPhoto(ss, { fileId, recruitId: 'r-jane' }).error, 'Recruit already has a photo');
-  assert.equal(api.linkPhoto(ss, { fileId, recruitId: 'r-ada' }).error, 'Recruit already has a photo');
+  assert.deepEqual(plain(api.linkPhoto(ss, ADMIN, { fileId, recruitId: 'r-jane' })), { ok: true, photoFileId: fileId, photoSource: 'folder' });
+  assert.equal(api.linkPhoto(ss, ADMIN, { fileId, recruitId: 'r-jane' }).error, 'Recruit already has a photo');
+  assert.equal(api.linkPhoto(ss, ADMIN, { fileId, recruitId: 'r-ada' }).error, 'Recruit already has a photo');
   driveState.files.outside = { id: 'outside', name: 'Jane.jpg', mime: 'image/jpeg', bytes: [1], parentIds: ['parent-2'] };
-  assert.equal(api.linkPhoto(ss, { fileId: 'outside', recruitId: 'r-jane' }).error, 'Photo is not in the Recruit Photos folder');
+  assert.equal(api.linkPhoto(ss, ADMIN, { fileId: 'outside', recruitId: 'r-jane' }).error, 'Photo is not in the Recruit Photos folder');
   assert.equal(driveState.trashCalls + driveState.sharingCalls, 0);
 });
 
@@ -249,12 +250,12 @@ test('explicit sync creates Recruit Photos beside the spreadsheet once; photo re
   const read = api.getPhotos(ss, { email: OWNER, role: 'admin' }, { ids: ['drv-x'] });
   assert.deepEqual(plain(read.photos), {});
   assert.equal(driveState.createFolderCalls, 0);
-  assert.deepEqual(plain(api.syncPhotoFolder(ss)), { linked: [], unmatched: [] });
+  assert.deepEqual(plain(api.syncPhotoFolder(ss, ADMIN)), { linked: [], unmatched: [] });
   assert.equal(driveState.createFolderCalls, 1);
   const folder = Object.values(driveState.folders).find(item => item.name === 'Recruit Photos');
   assert.deepEqual(folder.parentIds, ['parent-1']);
   const lookups = driveState.fileLookups;
-  api.syncPhotoFolder(ss);
+  api.syncPhotoFolder(ss, ADMIN);
   assert.equal(driveState.createFolderCalls, 1);
   assert.equal(driveState.fileLookups, lookups);
 });

@@ -36,10 +36,15 @@ test('admin: last-admin and self-removal guards, wipe guard, reset to seed', asy
   await b.call(ADMIN, 'manageUser', { op: 'setRole', email: 'taylor.admin@example.test', role: 'brother' });
   await assert.rejects(() => b.call('taylor.admin@example.test', 'manageUser', { op: 'setRole', email: ADMIN, role: 'brother' }), /Admin only/);
   await assert.rejects(() => b.call(ADMIN, 'manageUser', { op: 'setRole', email: ADMIN, role: 'brother' }), /last admin/);
-  await assert.rejects(() => b.call(ADMIN, 'wipeCycle', { confirm: 'WIPE CYCLE', expected: {} }), /Data changed/);
+  await assert.rejects(() => b.call(ADMIN, 'wipeCycle', { confirm: 'WIPE CYCLE' }), /changed since/);
+  const stale = (await b.call(ADMIN, 'getAdminData')).cycleFingerprint;
+  // Same-count change: edit an existing note.
+  const recruitId = (await b.call(ADMIN, 'getAdminData')).recruits[0].id;
+  await b.call(ADMIN, 'saveNote', { recruitId, content: 'edited after load' });
+  await assert.rejects(() => b.call(ADMIN, 'wipeCycle', { confirm: 'WIPE CYCLE', expectedFingerprint: stale }), /changed since/);
   const d = await b.call(ADMIN, 'getAdminData');
-  const expected = { Recruits: d.recruits.length, Events: d.events.length, EventRecruits: d.attendance.length, Votes: d.votes.length, Notes: d.notes.length };
-  assert.equal((await b.call(ADMIN, 'wipeCycle', { confirm: 'WIPE CYCLE', expected })).ok, true);
+  assert.notEqual(d.cycleFingerprint, stale);
+  assert.equal((await b.call(ADMIN, 'wipeCycle', { confirm: 'WIPE CYCLE', expectedFingerprint: d.cycleFingerprint })).ok, true);
   assert.equal((await b.call(ADMIN, 'getAdminData')).recruits.length, 0);
   b.reset();
   assert.equal((await b.call(ADMIN, 'getAdminData')).recruits.length, demoSeed().recruits.length);

@@ -58,6 +58,19 @@ export function createDemoBackend({ latencyMs = 120, seed = demoSeed } = {}) {
     Recruits: db.recruits.length, Events: db.events.length, EventRecruits: db.attendance.length, Votes: db.votes.length, Notes: db.notes.length,
   });
 
+  // Content fingerprint of the cycle data (demo stand-in for the server's
+  // SHA-256): changes on any edit, even when row counts stay the same.
+  const fingerprint = () => {
+    const json = JSON.stringify([db.recruits, db.events, db.attendance, db.votes, db.notes]);
+    let h1 = 0x811c9dc5, h2 = 0x01000193;
+    for (let i = 0; i < json.length; i++) {
+      const c = json.charCodeAt(i);
+      h1 = Math.imul(h1 ^ c, 16777619) >>> 0;
+      h2 = Math.imul(h2 ^ c, 2246822507) >>> 0;
+    }
+    return h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0') + ':' + json.length;
+  };
+
   const handlers = {
     bootstrap: email => requireMember(email),
     getMe: email => requireMember(email),
@@ -95,7 +108,7 @@ export function createDemoBackend({ latencyMs = 120, seed = demoSeed } = {}) {
     },
     getAdminData(email) {
       requireAdmin(email);
-      return clone({ schemaVersion: 2, ...db });
+      return clone({ schemaVersion: 2, cycleFingerprint: fingerprint(), ...db });
     },
     addRecruit(email, body) {
       requireAdmin(email);
@@ -204,8 +217,9 @@ export function createDemoBackend({ latencyMs = 120, seed = demoSeed } = {}) {
       requireAdmin(email);
       if (body.confirm !== WIPE_CONFIRMATION) throw fail('Type ' + WIPE_CONFIRMATION + ' to confirm.', 'INVALID');
       const now = counts();
-      const expected = body.expected || {};
-      if (Object.keys(now).some(k => Number(expected[k]) !== now[k])) throw fail('Data changed since you opened this page. Reload and try again.', 'CONFLICT');
+      if (!body.expectedFingerprint || body.expectedFingerprint !== fingerprint()) {
+        throw fail('Cycle data changed since this page loaded. Reload and review before wiping.', 'CONFLICT');
+      }
       db = { ...db, recruits: [], events: [], attendance: [], votes: [], notes: [] };
       return { ok: true, cleared: now, message: 'Cycle wiped. Users preserved.' };
     },

@@ -49,6 +49,10 @@ export default function Admin() {
   const [photoWarning, setPhotoWarning] = useState(null)
 
   const dataRef = useRef(null)
+  // Fingerprint of the cycle data as last loaded from the server. The wipe
+  // sends it back; any change since (anyone's, including this admin's own
+  // edits) makes the server refuse, and the page reloads for review.
+  const fingerprintRef = useRef('')
   const inflight = useRef(createInflightGuard())
 
   function commit(next) {
@@ -63,6 +67,7 @@ export default function Admin() {
     setLoadError(null)
     api('getAdminData').then(d => {
       if (cancelled) return
+      fingerprintRef.current = d.cycleFingerprint || ''
       commit(d)
       const drafts = draftsFrom(d)
       setNoteDrafts(drafts)
@@ -260,25 +265,34 @@ export default function Admin() {
       optimistic(`user-remove:${email}`, { type: 'removeUser', email }, () => api('manageUser', { op: 'remove', email }))
     },
     async wipe(confirmText) {
-      const d = dataRef.current
-      const expected = {
-        Recruits: d.recruits.length, Events: d.events.length, EventRecruits: d.attendance.length, Votes: d.votes.length, Notes: d.notes.length,
-      }
       if (!begin('wipe')) {
         setError('Finish the changes that are still saving, then try again.')
         return false
       }
-      try {
-        await api('wipeCycle', { confirm: confirmText, expected })
+      const reload = async () => {
         const fresh = await api('getAdminData')
+        fingerprintRef.current = fresh.cycleFingerprint || ''
         commit(fresh)
         const drafts = draftsFrom(fresh)
         setNoteDrafts(drafts)
         setSavedNotes(drafts)
+      }
+      try {
+        await api('wipeCycle', { confirm: confirmText, expectedFingerprint: fingerprintRef.current })
+        await reload()
         setUnmatched(null)
         setNotice('Cycle wiped. Members were kept.')
         return true
       } catch (err) {
+        if (err && err.code === 'CONFLICT') {
+          try {
+            await reload()
+            setError('Cycle data changed since this page loaded (including any edits you made). Nothing was wiped. The latest data is now shown; review it and confirm again.')
+          } catch (reloadErr) {
+            fail(reloadErr)
+          }
+          return false
+        }
         fail(err)
         return false
       } finally {
