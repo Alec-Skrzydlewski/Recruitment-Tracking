@@ -54,6 +54,39 @@ test('first dated addEvent appends only the date header, keeps rows/unknown colu
   assert.deepEqual(rowsOf(ss, 'Events')[0], ['id', 'name', 'notes', 'date']);
 });
 
+test('blank-header data column and empty-evaluating formula header survive; date gets a new empty column', () => {
+  const ss = useWs({ Events: [['evt-1', 'Info Night', 'legacy-a'], ['evt-2', 'Case Night', 'legacy-b']] }, { Events: ['id', 'name', ''] });
+  const sheet = ss.getSheetByName('Events');
+  // Simulate a formula header in column 4 that evaluates to "": values show
+  // nothing there, but the sheet's used range includes it.
+  const realLast = sheet.getLastColumn.bind(sheet);
+  sheet.getLastColumn = () => Math.max(realLast(), 4);
+  const before = rowsOf(ss, 'Events');
+  assert.equal(post('addEvent', 'owner', { name: 'Fall', date: '2026-09-15' }).error, undefined);
+  const rows = rowsOf(ss, 'Events');
+  assert.deepEqual(rows[0].slice(0, 3), ['id', 'name', '']);
+  assert.ok(!rows[0][3], 'formula column 4 untouched');
+  assert.equal(rows[0][4], 'date', 'date header placed in column 5');
+  assert.deepEqual(rows.slice(1, 3).map(r => r.slice(0, 3)), before.slice(1).map(r => r.slice(0, 3)));
+  assert.ok(rows.slice(1, 3).every(r => !r[4]), 'new column empty for legacy rows');
+  assert.equal(sheet.rows[3][4], '2026-09-15');
+  assert.equal(sheet.rows[3][2], '', 'nothing written into the blank-header column');
+});
+
+test('unauthorized, invalid and replayed requests never add the date header', () => {
+  const ss = useWs();
+  post('addEvent', 'member', { name: 'X', date: '2026-09-15' });
+  post('addEvent', 'owner', { name: 'X', date: '2026-02-30' });
+  assert.deepEqual(rowsOf(ss, 'Events')[0], ['id', 'name']);
+  const a = post('addEvent', 'owner', { name: 'R', date: '2026-09-15', requestId: 'rep-1' });
+  const header = rowsOf(ss, 'Events')[0].slice();
+  const count = rowsOf(ss, 'Events').length;
+  const b = post('addEvent', 'owner', { name: 'R', date: '2026-09-15', requestId: 'rep-1' });
+  assert.equal(a.id, b.id);
+  assert.deepEqual(rowsOf(ss, 'Events')[0], header);
+  assert.equal(rowsOf(ss, 'Events').length, count, 'replay wrote nothing');
+});
+
 test('invalid dates are rejected before any write or lock', () => {
   const bad = ['2027-02-29', '2026-13-01', '2026-00-10', '2026-04-31', '2026-9-15', '09/15/2026', '2026-09-15T00:00:00Z',
     ' 2026-09-15', '1999-12-31', '2101-01-01', 20260915, true, {}, ['2026-09-15'], 'abc'];

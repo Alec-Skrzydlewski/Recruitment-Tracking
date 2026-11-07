@@ -158,7 +158,7 @@ Six sheets. Columns are located by header name; extra columns are allowed.
 | Votes | eventId, recruitId, userEmail, score (1–10), timestamp |
 | Notes | recruitId, content, updatedAt |
 
-**Event dates (optional).** `Events.date` holds a date-only `YYYY-MM-DD` value stored as literal text. It is not required: sheets without the column keep working and events read as "Date not set". Setup does not add it; the first time an admin saves an event with a date, the backend appends a `date` header after the last existing header (under the admin lock), touching no rows. Date cells typed by hand are read in the spreadsheet time zone. Existing events are never backfilled.
+**Event dates (optional).** `Events.date` holds a date-only `YYYY-MM-DD` value stored as literal text. It is not required: sheets without the column keep working and events read as "Date not set". Setup does not add it; the first time an admin saves an event with a date, the backend appends a `date` header in a new column beyond the sheet's full used range (under the admin lock), touching no existing cell. Date cells typed by hand are read in the spreadsheet time zone. Existing events are never backfilled.
 
 **Votes and deletes** (`src/lib/tally.js`, `apps-script/Code.gs`):
 

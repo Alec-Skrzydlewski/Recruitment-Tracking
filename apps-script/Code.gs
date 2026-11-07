@@ -317,12 +317,16 @@ function readEventDate(value, ss) {
   try { return validEventDate(String(value).trim()); } catch (err) { return ''; }
 }
 
-// Adds the optional column header once, after the last non-blank header
-// cell, without touching any row. Only called under the admin lock.
+// Adds the optional column header once, in a new column after the sheet's
+// full used range, without touching any existing cell. Only called under the admin lock.
 function ensureOptionalColumn(table, key) {
   if (table.col[key] !== undefined) return;
+  // Append strictly beyond everything the sheet uses: blank-looking header
+  // cells may hold legacy data below or a formula that evaluates to empty.
   let width = table.header.length;
-  while (width > 0 && table.header[width - 1] === '') width -= 1;
+  table.values.forEach(row => { if (row && row.length > width) width = row.length; });
+  const last = Number(table.sheet.getLastColumn()) || 0;
+  if (last > width) width = last;
   table.sheet.getRange(1, width + 1).setValue(key);
   table.header[width] = key;
   if (!table.values[0]) table.values[0] = [];
