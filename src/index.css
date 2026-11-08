@@ -239,7 +239,8 @@ input[type='file'] { max-width: 100%; min-width: 0; font-size: 14px; }
 .badge-yes { background: #e7f6ec; color: #1d6b3a; }
 .badge-no { background: var(--line); color: var(--muted); }
 .an-hero { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: center; margin-bottom: 16px; }
-@media (min-width: 720px) { .an-hero { grid-template-columns: minmax(0, clamp(320px, 45%, 440px)) minmax(0, 1fr); gap: 24px; } }
+/* Fixed (non-shrinking) portrait track: 320px at 720px viewport, 400px from 952px up. */
+@media (min-width: 720px) { .an-hero { grid-template-columns: clamp(320px, 42vw, 400px) minmax(0, 1fr); gap: 24px; } }
 .an-hero-info { min-width: 0; }
 .an-name { font-size: clamp(2rem, 6vw, 3rem); line-height: 1.1; letter-spacing: -0.02em; margin: 0; overflow-wrap: anywhere; }
 .an-degree { font-size: clamp(1.25rem, 3.5vw, 1.65rem); line-height: 1.3; font-weight: 600; color: var(--ink); margin: 10px 0 0; overflow-wrap: anywhere; }
