@@ -426,6 +426,17 @@ test('showcase analytics: simple per-recruit stats, Absent events, and no fabric
   assert.deepEqual([...chart.querySelectorAll('.chart-count')].map(t => t.textContent), counts.map(c => (c ? String(c) : '')));
   assert.match(document.querySelector('figure.ratings-chart figcaption').textContent, new RegExp('How members rated Jakobi Meyers \\(' + votes.length + ' ratings\\)'));
   assert.equal(document.getElementById('note-r-jax-jakobi-meyers').value, '', 'no seeded notes about real players');
+  const portrait = await until(() => document.querySelector('.an-portrait img'), 'large portrait');
+  assert.equal(portrait.getAttribute('alt'), 'Photo of Jakobi Meyers');
+  assert.match(portrait.getAttribute('src'), /jakobi-meyers/);
+  await choose(select, 'r-jax-bhayshul-tuten');
+  await until(() => /bhayshul-tuten/.test((document.querySelector('.an-portrait img') || {}).src || ''), 'portrait follows selection');
+  assert.equal(document.querySelector('.an-portrait img').getAttribute('alt'), 'Photo of Bhayshul Tuten');
+  assert.equal(document.querySelectorAll('.an-portrait').length, 1);
+  act(() => document.querySelector('.an-portrait img').dispatchEvent(new window.Event('error')));
+  const fb = await until(() => document.querySelector('.an-portrait-fallback'), 'broken image falls back');
+  assert.equal(fb.getAttribute('aria-label'), 'No photo for Bhayshul Tuten');
+  assert.equal(fb.textContent, 'BT');
   act(() => root.unmount());
 
   const noVotes = { ...backend, call(email, action, extra) {
@@ -438,6 +449,7 @@ test('showcase analytics: simple per-recruit stats, Absent events, and no fabric
   assert.match(text, /No ratings for .* yet/);
   assert.match(text, /No ratings yet/);
   assert.equal(document.querySelector('figure.ratings-chart'), null, 'no empty chart without ratings');
+  assert.ok(document.querySelector('.an-portrait'), 'portrait area present');
   assert.equal(/NaN|0\.0 \/10/.test(text), false);
   act(() => root.unmount());
   assert.deepEqual(network, []);

@@ -1,5 +1,6 @@
 import { formatEventDate } from '../../lib/eventDate'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { initials } from '../../components/RecruitAvatar'
 import { buildRecruitAnalytics, recruitChoices, resolveSelection, recruitCsv, fmt } from '../../lib/analytics'
 
 // Individual results: one recruit at a time, chosen from a single dropdown.
@@ -26,6 +27,25 @@ function RatingsChart({ counts, name }) {
       </div>
       <p className="small muted" style={{ margin: 0 }}>Score (1–10) along the bottom; bar height is the number of ratings.</p>
     </figure>
+  )
+}
+
+// Large portrait of the selected recruit, from the same photo source the rest
+// of the admin uses (ctl.photoFor). Falls back to initials if missing/broken.
+function RecruitPortrait({ name, src }) {
+  const [broken, setBroken] = useState(false)
+  useEffect(() => { setBroken(false) }, [src])
+  if (src && !broken) {
+    return (
+      <div className="an-portrait">
+        <img src={src} alt={'Photo of ' + name} onError={() => setBroken(true)} decoding="async" />
+      </div>
+    )
+  }
+  return (
+    <div className="an-portrait an-portrait-fallback" role="img" aria-label={'No photo for ' + name}>
+      <span aria-hidden="true">{initials(name)}</span>
+    </div>
   )
 }
 
@@ -92,6 +112,8 @@ export default function AnalyticsTab({ data, ctl }) {
   }
 
   const o = d.overall
+  const recruitRow = ((data && data.recruits) || []).find(r => String(r.id) === String(d.id))
+  const photoSrc = (ctl && ctl.photoFor && recruitRow && ctl.photoFor(recruitRow)) || ''
   const byEvent = new Map(d.perEvent.map(e => [String(e.eventId), e]))
   const events = ((data && data.events) || []).map(ev => {
     const e = byEvent.get(String(ev.id))
@@ -108,13 +130,16 @@ export default function AnalyticsTab({ data, ctl }) {
       </section>
 
       <section className="card" aria-labelledby="an-detail" aria-live="polite">
-        <div className="row" style={{ justifyContent: 'space-between' }}>
-          <h2 id="an-detail">{d.name}</h2>
-          <button type="button" className="btn-sm" onClick={exportCsv}>Export {d.name}’s results (CSV)</button>
+        <div className="an-hero">
+          <RecruitPortrait key={d.id} name={d.name} src={photoSrc} />
+          <div className="an-hero-info">
+            <h2 id="an-detail">{d.name}</h2>
+            <p className="small muted" style={{ margin: '4px 0 12px' }}>
+              {[[d.major, d.secondMajor].filter(Boolean).join(' / '), d.gradYear ? 'Class of ' + d.gradYear : 'Graduation year not recorded'].filter(Boolean).join(' · ')}
+            </p>
+            <button type="button" className="btn-sm" onClick={exportCsv}>Export {d.name}’s results (CSV)</button>
+          </div>
         </div>
-        <p className="small muted" style={{ margin: '4px 0 12px' }}>
-          {[[d.major, d.secondMajor].filter(Boolean).join(' / '), d.gradYear ? 'Class of ' + d.gradYear : 'Graduation year not recorded'].filter(Boolean).join(' · ')}
-        </p>
 
         <div className="stats stats-simple">
           <div className="stat"><div className="stat-value">{o.n ? fmt(o.mean, 1) : '—'}{o.n > 0 && <span className="stat-unit"> /10</span>}</div><div className="stat-label">Average score</div></div>

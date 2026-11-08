@@ -43,3 +43,10 @@ test('Analytics headline stats are large and responsive, scoped to .stats-simple
   assert.match(css, /\.stat-unit \{[^}]*font-size: 0\.45em;/, '/10 stays subordinate');
   assert.match(css, /\.stat-value \{ font-size: 1\.5rem;/, 'other app stats unchanged');
 });
+
+test('Analytics portrait is oversized: full width on phones, ~320–440px column on desktop, face-framed', () => {
+  assert.match(css, /\.an-hero \{ display: grid; grid-template-columns: 1fr;/);
+  assert.match(css, /@media \(min-width: 720px\) \{ \.an-hero \{ grid-template-columns: minmax\(0, clamp\(320px, 45%, 440px\)\) minmax\(0, 1fr\);/);
+  assert.match(css, /\.an-portrait \{ width: 100%; aspect-ratio: 1 \/ 1;/);
+  assert.match(css, /\.an-portrait img \{[^}]*object-fit: cover; object-position: 50% 20%;/);
+});
