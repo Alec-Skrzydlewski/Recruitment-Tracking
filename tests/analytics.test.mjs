@@ -2,8 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildAnalytics, csvCell, mean, median, sampleSd, histogram,
-  buildRecruitAnalytics, recruitChoices, resolveSelection, recruitCsv,
+  buildAnalytics, mean, median, sampleSd, histogram,
+  buildRecruitAnalytics, recruitChoices, resolveSelection, 
 } from '../src/lib/analytics.js';
 import { buildTally } from '../src/lib/tally.js';
 
@@ -154,49 +154,6 @@ test('engine scoping semantics (events, name, year, major) used by the individua
 });
 
 
-// Minimal RFC 4180 parser for round-trip checks.
-function parseCsv(text) {
-  const rows = [[]];
-  let cell = '';
-  let quoted = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (quoted) {
-      if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; } else if (c === '"') quoted = false; else cell += c;
-    } else if (c === '"') quoted = true;
-    else if (c === ',') { rows.at(-1).push(cell); cell = ''; }
-    else if (c === '\n') { rows.at(-1).push(cell); cell = ''; rows.push([]); }
-    else cell += c;
-  }
-  if (cell || rows.at(-1).length) rows.at(-1).push(cell);
-  return rows.filter(r => r.length);
-}
-
-test('CSV: bare CR, LF, quotes and commas round-trip as one cell', () => {
-  for (const name of ['a\rb', 'a\nb', 'a\r\nb', 'say "hi", ok']) {
-    const data = fixture();
-    data.recruits[0].name = name;
-    const rows = parseCsv(recruitCsv(buildRecruitAnalytics(data, 'r1')));
-    const header = rows[0];
-    assert.ok(rows.slice(1).every(r => r.length === header.length), JSON.stringify(name));
-    assert.ok(rows.slice(1).every(r => r[header.indexOf('recruit')] === name), JSON.stringify(name));
-  }
-  assert.equal(csvCell('a\rb'), '"a\rb"');
-});
-
-test('CSV: formula prefixes behind spaces, tabs and NBSP are neutralized, data preserved', () => {
-  for (const v of ['=1+1', ' =1+1', '\u00a0=1+1', '\u00a0 @SUM(A1)', '  +7', '\t-3', '\u3000=x', '\r=1']) {
-    const out = csvCell(v);
-    const parsed = parseCsv(out + '\n')[0][0];
-    assert.equal(parsed, "'" + v, JSON.stringify(v));
-  }
-  for (const v of ['Avery Quill', 'Finance (BSBA)', '2028', '7.50', 'a=b', 'x-y', '']) {
-    assert.equal(csvCell(v), v, JSON.stringify(v));
-  }
-  assert.equal(csvCell(null), '');
-  assert.equal(csvCell(7), '7');
-});
-
 // ---------- individual recruit view ----------
 
 test('recruit choices: alphabetical, stable IDs, duplicate names disambiguated', () => {
@@ -220,7 +177,7 @@ test('selection defaults to the first recruit and recovers when the selected one
   assert.equal(resolveSelection([], 'r1'), '');
 });
 
-test('two different recruits change every detail and the export scope', () => {
+test('two different recruits change every detail', () => {
   const data = fixture();
   const ada = buildRecruitAnalytics(data, 'r1');
   const ben = buildRecruitAnalytics(data, 'r2');
@@ -231,12 +188,6 @@ test('two different recruits change every detail and the export scope', () => {
   assert.deepEqual([ben.overall.n, ben.voters, ben.eventsAttended, ben.eventsRated, ben.overall.sd], [2, 1, 1, 1, 0]);
   assert.deepEqual(ben.perEvent.map(e => e.name), ['One'], 'only attended/rated events');
   assert.deepEqual(ben.overall.histogram, [0, 0, 0, 0, 0, 0, 2, 0, 0, 0]);
-  const adaCsv = recruitCsv(ada);
-  const benCsv = recruitCsv(ben);
-  assert.ok(adaCsv.includes(',Ada,') && !adaCsv.includes('Ben') && !adaCsv.includes(',Cy,'));
-  assert.ok(benCsv.includes(',Ben,') && !benCsv.includes('Ada'));
-  assert.equal(/@x\.test/.test(adaCsv + benCsv), false, 'no voter identities');
-  assert.equal(parseCsv(adaCsv).length, 1 + 1 + 2, 'header + overall + 2 events');
   assert.equal(JSON.stringify(ada).includes('Ben'), false, 'no other recruit data in the detail');
 });
 
@@ -248,9 +199,6 @@ test('individual view: no ballots, unknown id, invalid rows ignored', () => {
   assert.equal(dee.eventsAttended, 1);
   assert.equal(dee.perEvent.length, 1);
   assert.equal(buildRecruitAnalytics(data, 'missing'), null);
-  assert.equal(recruitCsv(null), '');
   // Ada's invalid rows (11, 0, 7.5, true, '', null, missing event) are not counted.
   assert.equal(buildRecruitAnalytics(data, 'r1').overall.n, 4);
-  const csv = parseCsv(recruitCsv(dee));
-  assert.equal(csv[1][csv[0].indexOf('mean')], '');
 });

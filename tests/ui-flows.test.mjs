@@ -310,7 +310,8 @@ test('analytics: one recruit dropdown, individual results, switching changes eve
   assert.equal(panel.textContent.includes('Avery Quill'), true, 'only as a dropdown option');
   assert.equal(document.getElementById('note-r-avery'), null, 'previous recruit note not shown');
   assert.equal(document.querySelectorAll('textarea[id^="note-"]').length, 1);
-  assert.ok(byText('button', 'Export Finley Moss’s results (CSV)'));
+  assert.equal([...document.querySelectorAll('button')].some(b => /export|csv/i.test(b.textContent)), false, 'no Analytics export');
+  assert.equal(document.querySelector('.an-name').textContent, 'Finley Moss');
   await type(document.getElementById('note-r-finley'), 'Asked good questions');
   await click(byText('button', 'Save note'));
   await until(() => backend.snapshot().notes.some(n => n.recruitId === 'r-finley' && n.content === 'Asked good questions'), 'note saved');
@@ -432,6 +433,9 @@ test('showcase analytics: simple per-recruit stats, Absent events, and no fabric
   await choose(select, 'r-jax-bhayshul-tuten');
   await until(() => /bhayshul-tuten/.test((document.querySelector('.an-portrait img') || {}).src || ''), 'portrait follows selection');
   assert.equal(document.querySelector('.an-portrait img').getAttribute('alt'), 'Photo of Bhayshul Tuten');
+  assert.equal(document.querySelector('h2.an-name').textContent, 'Bhayshul Tuten');
+  assert.equal(document.querySelector('.an-degree').textContent, 'Marketing (BSBA) (example)');
+  assert.equal(document.querySelector('.an-year').textContent, 'Class of 2027');
   assert.equal(document.querySelectorAll('.an-portrait').length, 1);
   act(() => document.querySelector('.an-portrait img').dispatchEvent(new window.Event('error')));
   const fb = await until(() => document.querySelector('.an-portrait-fallback'), 'broken image falls back');

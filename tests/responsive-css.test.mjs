@@ -50,3 +50,9 @@ test('Analytics portrait is oversized: full width on phones, ~320–440px column
   assert.match(css, /\.an-portrait \{ width: 100%; aspect-ratio: 1 \/ 1;/);
   assert.match(css, /\.an-portrait img \{[^}]*object-fit: cover; object-position: 50% 20%;/);
 });
+
+test('Analytics recruit name and degree are large, responsive and wrap', () => {
+  assert.match(css, /\.an-name \{ font-size: clamp\(2rem, 6vw, 3rem\);[^}]*overflow-wrap: anywhere;/);
+  assert.match(css, /\.an-degree \{ font-size: clamp\(1\.25rem, 3\.5vw, 1\.65rem\);[^}]*overflow-wrap: anywhere;/);
+  assert.match(css, /\.an-year \{ font-size: clamp\(1\.05rem, 2\.5vw, 1\.25rem\);/);
+});

@@ -1,7 +1,7 @@
 import { formatEventDate } from '../../lib/eventDate'
 import { useEffect, useMemo, useState } from 'react'
 import { initials } from '../../components/RecruitAvatar'
-import { buildRecruitAnalytics, recruitChoices, resolveSelection, recruitCsv, fmt } from '../../lib/analytics'
+import { buildRecruitAnalytics, recruitChoices, resolveSelection, fmt } from '../../lib/analytics'
 
 // Individual results: one recruit at a time, chosen from a single dropdown.
 // Simple 1–10 bar chart: how many ratings got each score. Counts sit above
@@ -92,16 +92,6 @@ export default function AnalyticsTab({ data, ctl }) {
   const selectedId = resolveSelection(choices, picked)
   const d = useMemo(() => (selectedId ? buildRecruitAnalytics(data, selectedId) : null), [data, selectedId])
 
-  function exportCsv() {
-    const blob = new Blob([recruitCsv(d)], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = 'recruit-' + String(d.name || 'results').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase() + '.csv'
-    link.click()
-    setTimeout(() => URL.revokeObjectURL(url), 0)
-  }
-
   if (!choices.length) {
     return (
       <section className="card analytics" aria-labelledby="an-empty">
@@ -133,11 +123,9 @@ export default function AnalyticsTab({ data, ctl }) {
         <div className="an-hero">
           <RecruitPortrait key={d.id} name={d.name} src={photoSrc} />
           <div className="an-hero-info">
-            <h2 id="an-detail">{d.name}</h2>
-            <p className="small muted" style={{ margin: '4px 0 12px' }}>
-              {[[d.major, d.secondMajor].filter(Boolean).join(' / '), d.gradYear ? 'Class of ' + d.gradYear : 'Graduation year not recorded'].filter(Boolean).join(' · ')}
-            </p>
-            <button type="button" className="btn-sm" onClick={exportCsv}>Export {d.name}’s results (CSV)</button>
+            <h2 id="an-detail" className="an-name">{d.name}</h2>
+            <p className="an-degree">{[d.major, d.secondMajor].filter(Boolean).join(' / ') || 'Degree not recorded'}</p>
+            <p className="an-year">{d.gradYear ? 'Class of ' + d.gradYear : 'Graduation year not recorded'}</p>
           </div>
         </div>
 

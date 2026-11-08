@@ -233,11 +233,8 @@ dense tables. No individual voter data is shown.
 
 Computed in the browser from the admin snapshot
 (`buildRecruitAnalytics` in `src/lib/analytics.js`); no new backend action,
-permission or dependency. **Export** downloads a CSV for the selected
-recruit only (overall row + one row per event; no voter identities). It is
-still private chapter data; cells are formula-guarded (leading `= + - @`,
-also after spaces/NBSP) and quoted for `" , CR LF`, which reduces but cannot
-rule out formula evaluation in every spreadsheet program.
+permission or dependency. There is no per-recruit export; the selected
+recruit's photo, name, degree and class year are shown large beside the stats.
 
 ## Running locally
 
@@ -341,7 +338,7 @@ frontend, so deploy and verify the backend (step 1) before merging.
 | Suite | Covers |
 | --- | --- |
 | `code-gs-security.test.mjs` | Token audience, issuer and expiry; fail-closed config; owner-only bootstrap and setup; the full authorization matrix; vote membership, existence and attendance checks; formula-text writes; reordered and duplicate headers; sanitized Drive errors; idempotency keyed by action, caller and request ID under the lock (concurrent, evicted and cross-action replays); admin revocation before the write lock (incl. after Drive work); desired-state attendance; the content-fingerprint wipe guard including same-count stale changes; permanent vote cascades on event/recruit delete and absence with unrelated rows and Drive files preserved; read-only invalid-vote preview and the locked, fingerprint- and count-bound cleanup of exactly the four criteria |
-| `analytics.test.mjs` | Exact analytics values: mean/median/SD/histogram, unequal event counts, equal-event vs all-ballot mean, duplicates, inactive-voter retention, invalid rows, empty cases; recruit dropdown order/labels/duplicates, default and removed-selection fallback; two recruits differ in every detail and in export scope; CSV CR/quote round-trip and formula guards |
+| `analytics.test.mjs` | Exact analytics values: mean/median/SD/histogram, unequal event counts, equal-event vs all-ballot mean, duplicates, inactive-voter retention, invalid rows, empty cases; recruit dropdown order/labels/duplicates, default and removed-selection fallback; two recruits differ in every detail |
 | `code-gs.test.mjs` | Parity with the original behavior: vote upsert and dedupe, required graduation year (no write, no Drive upload) and legacy rows without one, user management guards, schema setup, photo upload, sync, link and folder rules |
 | `responsive-css.test.mjs` | Phone layout guards (360–390px): file pickers cannot widen the page, header wraps into rows with one-line Sign out, admin tabs wrap, voting scale stays 2x5 |
 | `ui-flows.test.mjs` | Real React pages in jsdom against the demo backend: direct-to-Analytics start (no Dashboard tab) (no landing/persona chooser), voter flow, vote save, rollback and retry, note-failure draft retention, wipe guard, reset; Analytics tab (default tab, simple stats without jargon, Attended/Absent event list, per-recruit notes save without leaking across recruits, legacy dashboard link, URL tab, single recruit dropdown, switching recruits, no cohort sections, deleted-selection fallback, no-recruit state, admin-only redirect, read failure); required graduation year in the add form. `fetch`, XHR, WebSocket, beacons and script injection are tripwires, and the tests assert zero network use. The unconfigured live app fails closed. |
