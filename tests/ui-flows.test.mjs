@@ -310,7 +310,8 @@ test('analytics: one recruit dropdown, individual results, switching changes eve
   assert.equal(panel.textContent.includes('Avery Quill'), true, 'only as a dropdown option');
   assert.equal(document.getElementById('note-r-avery'), null, 'previous recruit note not shown');
   assert.equal(document.querySelectorAll('textarea[id^="note-"]').length, 1);
-  assert.ok(byText('button', 'Export Finley Moss’s results (CSV)'));
+  assert.equal([...document.querySelectorAll('button')].some(b => /export|csv/i.test(b.textContent)), false, 'no Analytics export');
+  assert.equal(document.querySelector('.an-name').textContent, 'Finley Moss');
   await type(document.getElementById('note-r-finley'), 'Asked good questions');
   await click(byText('button', 'Save note'));
   await until(() => backend.snapshot().notes.some(n => n.recruitId === 'r-finley' && n.content === 'Asked good questions'), 'note saved');
@@ -426,6 +427,20 @@ test('showcase analytics: simple per-recruit stats, Absent events, and no fabric
   assert.deepEqual([...chart.querySelectorAll('.chart-count')].map(t => t.textContent), counts.map(c => (c ? String(c) : '')));
   assert.match(document.querySelector('figure.ratings-chart figcaption').textContent, new RegExp('How members rated Jakobi Meyers \\(' + votes.length + ' ratings\\)'));
   assert.equal(document.getElementById('note-r-jax-jakobi-meyers').value, '', 'no seeded notes about real players');
+  const portrait = await until(() => document.querySelector('.an-portrait img'), 'large portrait');
+  assert.equal(portrait.getAttribute('alt'), 'Photo of Jakobi Meyers');
+  assert.match(portrait.getAttribute('src'), /jakobi-meyers/);
+  await choose(select, 'r-jax-bhayshul-tuten');
+  await until(() => /bhayshul-tuten/.test((document.querySelector('.an-portrait img') || {}).src || ''), 'portrait follows selection');
+  assert.equal(document.querySelector('.an-portrait img').getAttribute('alt'), 'Photo of Bhayshul Tuten');
+  assert.equal(document.querySelector('h2.an-name').textContent, 'Bhayshul Tuten');
+  assert.equal(document.querySelector('.an-degree').textContent, 'Marketing (BSBA) (example)');
+  assert.equal(document.querySelector('.an-year').textContent, 'Class of 2027');
+  assert.equal(document.querySelectorAll('.an-portrait').length, 1);
+  act(() => document.querySelector('.an-portrait img').dispatchEvent(new window.Event('error')));
+  const fb = await until(() => document.querySelector('.an-portrait-fallback'), 'broken image falls back');
+  assert.equal(fb.getAttribute('aria-label'), 'No photo for Bhayshul Tuten');
+  assert.equal(fb.textContent, 'BT');
   act(() => root.unmount());
 
   const noVotes = { ...backend, call(email, action, extra) {
@@ -438,6 +453,7 @@ test('showcase analytics: simple per-recruit stats, Absent events, and no fabric
   assert.match(text, /No ratings for .* yet/);
   assert.match(text, /No ratings yet/);
   assert.equal(document.querySelector('figure.ratings-chart'), null, 'no empty chart without ratings');
+  assert.ok(document.querySelector('.an-portrait'), 'portrait area present');
   assert.equal(/NaN|0\.0 \/10/.test(text), false);
   act(() => root.unmount());
   assert.deepEqual(network, []);

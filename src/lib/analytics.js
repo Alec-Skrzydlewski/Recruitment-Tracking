@@ -193,21 +193,6 @@ export function fmt(x, digits = 2) {
   return x == null || Number.isNaN(x) ? '—' : Number(x).toFixed(digits)
 }
 
-// Spreadsheet formula guard: if the first non-whitespace character
-// (spaces, tabs, CR/LF, NBSP and other Unicode spaces) is = + - @, or the
-// value starts with a tab/CR, prefix an apostrophe. The original text is kept
-// after the prefix. This reduces, but cannot guarantee against, formula
-// evaluation in every spreadsheet program.
-const FORMULA_START = /^[\s\u00a0\u2000-\u200b\u202f\u205f\u3000\ufeff]*[=+\-@]|^[\t\r]/
-
-export function csvCell(v) {
-  const s = v == null ? '' : String(v)
-  const safe = FORMULA_START.test(s) ? "'" + s : s
-  return /[",\r\n]/.test(safe) ? '"' + safe.replace(/"/g, '""') + '"' : safe
-}
-
-const num = (x, d = 2) => (x == null || Number.isNaN(x) ? '' : Number(x).toFixed(d))
-
 // ---------- Individual recruit view (the Analytics tab) ----------
 
 // Alphabetical recruit list for the selector. Option values are the stable
@@ -258,19 +243,4 @@ export function buildRecruitAnalytics(data, recruitId) {
     equalEventMean: row.equalEventMean,
     perEvent: attendedOrRated,
   }
-}
-
-// CSV for the selected recruit only: one overall row plus one row per
-// attended event. Aggregates only, no voter identities.
-export function recruitCsv(detail) {
-  if (!detail) return ''
-  const head = ['scope', 'recruit', 'gradYear', 'event', 'ballots', 'uniqueVoters', 'mean', 'median', 'sd', 'min', 'max',
-    'score1', 'score2', 'score3', 'score4', 'score5', 'score6', 'score7', 'score8', 'score9', 'score10']
-  const line = (scope, event, s, voters) => [
-    scope, detail.name, detail.gradYear, event, s.n, voters, num(s.mean), num(s.median, 1), num(s.sd),
-    s.min == null ? '' : s.min, s.max == null ? '' : s.max, ...s.histogram,
-  ].map(csvCell).join(',')
-  const lines = [line('overall', '', detail.overall, detail.voters)]
-    .concat(detail.perEvent.map(e => line('event', e.name, e, e.voters)))
-  return [head.join(',')].concat(lines).join('\n') + '\n'
 }

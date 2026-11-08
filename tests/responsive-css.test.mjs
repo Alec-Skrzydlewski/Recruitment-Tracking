@@ -43,3 +43,20 @@ test('Analytics headline stats are large and responsive, scoped to .stats-simple
   assert.match(css, /\.stat-unit \{[^}]*font-size: 0\.45em;/, '/10 stays subordinate');
   assert.match(css, /\.stat-value \{ font-size: 1\.5rem;/, 'other app stats unchanged');
 });
+
+test('Analytics portrait is oversized: full width on phones, 320–400px non-shrinking column on desktop, face-framed', () => {
+  assert.match(css, /\.an-hero \{ display: grid; grid-template-columns: 1fr;/);
+  assert.match(css, /@media \(min-width: 720px\) \{ \.an-hero \{ grid-template-columns: clamp\(320px, 42vw, 400px\) minmax\(0, 1fr\);/);
+  assert.doesNotMatch(css, /\.an-hero \{[^}]*grid-template-columns: minmax\(0, clamp/, 'portrait track must not be allowed to shrink below 320px');
+  // At 1280px viewport the track resolves to 400px; at 720px to 320px.
+  const track = vw => Math.min(400, Math.max(320, 0.42 * vw));
+  assert.equal(track(1280), 400); assert.equal(track(720), 320);
+  assert.match(css, /\.an-portrait \{ width: 100%; aspect-ratio: 1 \/ 1;/);
+  assert.match(css, /\.an-portrait img \{[^}]*object-fit: cover; object-position: 50% 20%;/);
+});
+
+test('Analytics recruit name and degree are large, responsive and wrap', () => {
+  assert.match(css, /\.an-name \{ font-size: clamp\(2rem, 6vw, 3rem\);[^}]*overflow-wrap: anywhere;/);
+  assert.match(css, /\.an-degree \{ font-size: clamp\(1\.25rem, 3\.5vw, 1\.65rem\);[^}]*overflow-wrap: anywhere;/);
+  assert.match(css, /\.an-year \{ font-size: clamp\(1\.05rem, 2\.5vw, 1\.25rem\);/);
+});
