@@ -19,7 +19,7 @@ averages. The backend is a Google Sheet plus a Google Apps Script web app, so a
 volunteer officer can operate it without servers, databases or a budget.
 
 > **Try the demo:** `npm ci && npm run dev:demo`, then open the printed
-> localhost URL; it opens straight on the admin dashboard. The demo runs entirely in your browser on
+> localhost URL; it opens straight on the admin Analytics tab. The demo runs entirely in your browser on
 > fictional data. It needs no sign-in, backend, or network.
 
 <!-- OWNER: add a sentence on your role/motivation and a hosted demo link here once published. -->
@@ -222,17 +222,16 @@ alphabetical, option values are recruit IDs, and duplicate names get the
 class year (and a short ID if still ambiguous). It opens on the first
 recruit; if the selected recruit is deleted it falls back to the first.
 
-For the selected recruit: mean, median, ballots, unique voters, sample SD
-(n − 1, with 2+ ballots), range, events attended and rated, equal-event
-mean, a 1–10 histogram with a data table, and a per-event breakdown (ballots,
-voters, mean, median, SD, range, score counts) for events they attended or
-were rated at. A "small" flag (< 3 ballots) is a reading aid, not a test.
-There is no cohort ranking, filters, participation or cross-recruit
-comparison on this page, no trends (events have no dates; vote timestamps
-are last-edit times) and no individual voter data. A collapsible section
-explains the calculations.
+Analytics is the first admin tab (there is no separate Dashboard; old
+`?tab=dashboard` links open Analytics). For the selected recruit it shows three
+plain numbers: **Average score** (/10), **Members who voted** (each member
+counted once) and **Events attended**; a one-line note that ratings are
+members' impressions, not a prediction; a simple list of every event (name,
+date, Attended/Absent, average and number of ratings); and that recruit's
+**Notes**, edited and saved exactly as before. No medians, SDs, histograms or
+dense tables. No individual voter data is shown.
 
-Computed in the browser from the same admin snapshot as the dashboard
+Computed in the browser from the admin snapshot
 (`buildRecruitAnalytics` in `src/lib/analytics.js`); no new backend action,
 permission or dependency. **Export** downloads a CSV for the selected
 recruit only (overall row + one row per event; no voter identities). It is
@@ -251,7 +250,7 @@ npm test              # all unit, backend, security and UI-flow tests
 npm run ci            # lint + tests + live build + demo build + bundle isolation check
 ```
 
-**Demo identity:** the showcase opens directly on the real admin dashboard as a
+**Demo identity:** the showcase opens directly on the real admin Analytics tab as a
 fixed fictional admin (Jordan Vale), with **Admin** and **Vote** in the header.
 There is no persona chooser or landing page.
 
@@ -345,7 +344,7 @@ frontend, so deploy and verify the backend (step 1) before merging.
 | `analytics.test.mjs` | Exact analytics values: mean/median/SD/histogram, unequal event counts, equal-event vs all-ballot mean, duplicates, inactive-voter retention, invalid rows, empty cases; recruit dropdown order/labels/duplicates, default and removed-selection fallback; two recruits differ in every detail and in export scope; CSV CR/quote round-trip and formula guards |
 | `code-gs.test.mjs` | Parity with the original behavior: vote upsert and dedupe, required graduation year (no write, no Drive upload) and legacy rows without one, user management guards, schema setup, photo upload, sync, link and folder rules |
 | `responsive-css.test.mjs` | Phone layout guards (360–390px): file pickers cannot widen the page, header wraps into rows with one-line Sign out, admin tabs wrap, voting scale stays 2x5 |
-| `ui-flows.test.mjs` | Real React pages in jsdom against the demo backend: direct-to-dashboard start (no landing/persona chooser), voter flow, vote save, rollback and retry, note-failure draft retention, wipe guard, reset; Analytics tab (URL tab, single recruit dropdown, switching recruits, no cohort sections, deleted-selection fallback, no-recruit state, admin-only redirect, read failure); required graduation year in the add form. `fetch`, XHR, WebSocket, beacons and script injection are tripwires, and the tests assert zero network use. The unconfigured live app fails closed. |
+| `ui-flows.test.mjs` | Real React pages in jsdom against the demo backend: direct-to-Analytics start (no Dashboard tab) (no landing/persona chooser), voter flow, vote save, rollback and retry, note-failure draft retention, wipe guard, reset; Analytics tab (default tab, simple stats without jargon, Attended/Absent event list, per-recruit notes save without leaking across recruits, legacy dashboard link, URL tab, single recruit dropdown, switching recruits, no cohort sections, deleted-selection fallback, no-recruit state, admin-only redirect, read failure); required graduation year in the add form. `fetch`, XHR, WebSocket, beacons and script injection are tripwires, and the tests assert zero network use. The unconfigured live app fails closed. |
 | `frontend-libs`, `demo-backend`, `api`, `headers`, … | Tally rules, the write queue, the photo cache, transport errors and timeouts, demo-rule parity, and the CSP |
 
 The suites use a synthetic in-memory Sheets, Drive, Lock and Cache

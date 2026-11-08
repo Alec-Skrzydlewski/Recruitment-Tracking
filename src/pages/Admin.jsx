@@ -4,11 +4,9 @@ import { useRuntime } from '../runtime'
 import {
   apply, rollback, replaceId, replaceIdInMap, nextTempId, isTempId, createInflightGuard,
 } from '../lib/adminState'
-import { buildTally } from '../lib/tally'
 import { photoCacheSet } from '../lib/photoCache'
 import { usePhotoMap } from '../lib/usePhotoMap'
 import { Banner, ErrorState, LoadingState, errorText } from '../components/ui'
-import DashboardTab from './admin/DashboardTab'
 import RecruitsTab from './admin/RecruitsTab'
 import EventsTab from './admin/EventsTab'
 import UsersTab from './admin/UsersTab'
@@ -16,7 +14,6 @@ import SettingsTab from './admin/SettingsTab'
 import AnalyticsTab from './admin/AnalyticsTab'
 
 const TABS = [
-  ['dashboard', 'Dashboard'],
   ['analytics', 'Analytics'],
   ['recruits', 'Recruits'],
   ['events', 'Events'],
@@ -44,8 +41,9 @@ export default function Admin() {
   // The selected tab lives in the URL (?tab=analytics), so every tab is
   // linkable. The whole page is already admin-only (routes.jsx).
   const [params, setParams] = useSearchParams()
-  const tab = TABS.some(([id]) => id === params.get('tab')) ? params.get('tab') : 'dashboard'
-  const setTab = id => setParams(id === 'dashboard' ? {} : { tab: id }, { replace: false })
+  const tab = TABS.some(([id]) => id === params.get('tab')) ? params.get('tab') : 'analytics'
+  // Analytics (with notes) is the first tab; old ?tab=dashboard links land here.
+  const setTab = id => setParams({ tab: id }, { replace: false })
   const [data, setData] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [attempt, setAttempt] = useState(0)
@@ -378,8 +376,6 @@ export default function Admin() {
     unmatched, photoWarning,
   }
 
-  const tally = useMemo(() => buildTally(data), [data])
-
   const photoIds = useMemo(() => {
     const ids = []
     ;((data && data.recruits) || []).forEach(r => { if (r.photoFileId) ids.push(r.photoFileId) })
@@ -431,8 +427,7 @@ export default function Admin() {
       </div>
 
       <div role="tabpanel" id={'panel-' + tab} aria-labelledby={'tab-' + tab}>
-        {tab === 'dashboard' && <DashboardTab data={data} tally={tally} ctl={ctl} />}
-        {tab === 'analytics' && <AnalyticsTab data={data} />}
+        {tab === 'analytics' && <AnalyticsTab data={data} ctl={ctl} />}
         {tab === 'recruits' && <RecruitsTab data={data} ctl={ctl} />}
         {tab === 'events' && <EventsTab data={data} ctl={ctl} />}
         {tab === 'users' && <UsersTab data={data} ctl={ctl} />}
