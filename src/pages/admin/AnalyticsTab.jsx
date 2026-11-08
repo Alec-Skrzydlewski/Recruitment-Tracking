@@ -3,6 +3,36 @@ import { useMemo, useState } from 'react'
 import { buildRecruitAnalytics, recruitChoices, resolveSelection, recruitCsv, fmt } from '../../lib/analytics'
 
 // Individual results: one recruit at a time, chosen from a single dropdown.
+// Simple 1–10 bar chart: how many ratings got each score. Counts sit above
+// the bars; the figure's accessible label lists every count.
+function RatingsChart({ counts, name }) {
+  const max = Math.max(1, ...counts)
+  const total = counts.reduce((a, b) => a + b, 0)
+  const W = 320
+  const H = 120
+  const bw = W / 10
+  const summary = counts.map((c, i) => `${i + 1}: ${c}`).join(', ')
+  return (
+    <figure className="ratings-chart">
+      <figcaption className="small"><strong>How members rated {name}</strong> <span className="muted">({total === 1 ? '1 rating' : total + ' ratings'})</span></figcaption>
+      <svg viewBox={`0 0 ${W} ${H + 34}`} role="img" aria-label={`Number of ratings for each score from 1 to 10. ${summary}`}>
+        {counts.map((c, i) => {
+          const h = c ? Math.max(3, (c / max) * H) : 0
+          const x = i * bw
+          return (
+            <g key={i}>
+              <rect x={x + 4} y={14 + H - h} width={bw - 8} height={h} rx="3" className="hist-bar" />
+              {c > 0 && <text x={x + bw / 2} y={10 + H - h} textAnchor="middle" className="chart-count">{c}</text>}
+              <text x={x + bw / 2} y={H + 30} textAnchor="middle" className="hist-axis">{i + 1}</text>
+            </g>
+          )
+        })}
+      </svg>
+      <p className="small muted" style={{ margin: 0 }}>Score (1–10) along the bottom; bar height is the number of ratings.</p>
+    </figure>
+  )
+}
+
 function RecruitNote({ recruit, ctl }) {
   const id = recruit.id
   const status = ctl.noteStatus[id]
@@ -100,6 +130,7 @@ export default function AnalyticsTab({ data, ctl }) {
             ? `No ratings for ${d.name} yet. Members can rate a recruit once they are checked in at an event.`
             : `The average of every 1–10 rating members gave ${d.name}. It reflects members’ impressions, not a prediction.`}
         </p>
+        {o.n > 0 && <RatingsChart counts={o.histogram} name={d.name} />}
       </section>
 
       <section className="card" aria-labelledby="an-events">

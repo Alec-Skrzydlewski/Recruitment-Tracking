@@ -296,7 +296,10 @@ test('analytics: one recruit dropdown, individual results, switching changes eve
   for (const jargon of ['Mean', 'Median', 'SD', 'Ballots', 'Unique voters', 'Equal-event', 'Score distribution', 'Scores 1–10', 'How these numbers']) {
     assert.equal(panel.textContent.includes(jargon), false, 'no ' + jargon);
   }
-  assert.equal(panel.querySelectorAll('table, figure.hist').length, 0, 'no dense tables or charts');
+  assert.equal(panel.querySelectorAll('table, figure.hist').length, 0, 'no dense tables');
+  const chart = panel.querySelector('figure.ratings-chart svg[role="img"]');
+  assert.ok(chart, 'simple ratings chart shown');
+  assert.equal(chart.querySelectorAll('rect').length, 10);
   assert.match(avery.note, /audit rotation/);
   assert.equal(document.getElementById('note-r-avery').labels[0].textContent, 'Notes on Avery Quill');
   await choose(select, 'r-finley');
@@ -416,6 +419,11 @@ test('showcase analytics: simple per-recruit stats, Absent events, and no fabric
   assert.equal(items.length, 2);
   assert.match(items[0], new RegExp('^Info SessionSep 8, 2026Attended' + avg.replace('.', '\\.') + '/10 · ' + votes.length + ' ratings$'));
   assert.equal(items[1], 'Case CompSep 15, 2026Absent—');
+  const counts = Array(10).fill(0); votes.forEach(v => counts[v.score - 1]++);
+  const chart = document.querySelector('figure.ratings-chart svg[role="img"]');
+  assert.equal(chart.getAttribute('aria-label'), 'Number of ratings for each score from 1 to 10. ' + counts.map((c, i) => (i + 1) + ': ' + c).join(', '));
+  assert.deepEqual([...chart.querySelectorAll('.chart-count')].map(t => t.textContent), counts.filter(Boolean).map(String));
+  assert.match(document.querySelector('figure.ratings-chart figcaption').textContent, new RegExp('How members rated Jakobi Meyers \\(' + votes.length + ' ratings\\)'));
   assert.equal(document.getElementById('note-r-jax-jakobi-meyers').value, '', 'no seeded notes about real players');
   act(() => root.unmount());
 
@@ -428,6 +436,7 @@ test('showcase analytics: simple per-recruit stats, Absent events, and no fabric
   assert.match(text, /—Average score0Members who voted/);
   assert.match(text, /No ratings for .* yet/);
   assert.match(text, /No ratings yet/);
+  assert.equal(document.querySelector('figure.ratings-chart'), null, 'no empty chart without ratings');
   assert.equal(/NaN|0\.0 \/10/.test(text), false);
   act(() => root.unmount());
   assert.deepEqual(network, []);
