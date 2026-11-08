@@ -35,3 +35,11 @@ test('ratings chart spans the full card width with 10 equal columns', () => {
   assert.match(css, /\.chart-bar \{[^}]*width: 100%;/);
   assert.doesNotMatch(css, /\.ratings-chart[^{]*\{[^}]*max-width/, 'chart is not capped to a fixed width');
 });
+
+test('Analytics headline stats are large and responsive, scoped to .stats-simple only', () => {
+  assert.match(css, /\.stats-simple \.stat-value \{[^}]*font-size: clamp\(1\.75rem, 7vw, 3\.25rem\);[^}]*line-height: 1\.05;/);
+  assert.match(css, /\.stats-simple \{ grid-template-columns: repeat\(3, minmax\(0, 1fr\)\); \}/);
+  assert.match(css, /\.stats-simple \.stat \{[^}]*min-width: 0;/);
+  assert.match(css, /\.stat-unit \{[^}]*font-size: 0\.45em;/, '/10 stays subordinate');
+  assert.match(css, /\.stat-value \{ font-size: 1\.5rem;/, 'other app stats unchanged');
+});

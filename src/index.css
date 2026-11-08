@@ -226,9 +226,12 @@ input[type='file'] { max-width: 100%; min-width: 0; font-size: 14px; }
 .data-table .badge { margin-left: 6px; }
 .data-table.compact th, .data-table.compact td { padding: 4px 6px; text-align: center; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.stats-simple { grid-template-columns: repeat(3, 1fr); }
-@media (min-width: 720px) { .stats-simple { grid-template-columns: repeat(3, 1fr); } }
-.stat-unit { font-size: 0.55em; color: var(--muted); font-weight: 500; }
+.stats-simple { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (min-width: 720px) { .stats-simple { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.stats-simple .stat { min-width: 0; padding: clamp(12px, 2.5vw, 20px) clamp(10px, 2.5vw, 20px); }
+.stats-simple .stat-value { font-size: clamp(1.75rem, 7vw, 3.25rem); line-height: 1.05; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.stats-simple .stat-label { margin-top: 6px; }
+.stat-unit { font-size: 0.45em; color: var(--muted); font-weight: 500; letter-spacing: 0; white-space: nowrap; }
 .event-results { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 10px; }
 .event-result { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; align-items: center; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .event-result .event-avg { grid-column: 1 / -1; }
