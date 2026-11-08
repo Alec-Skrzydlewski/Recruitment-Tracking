@@ -28,3 +28,10 @@ test('admin tabs wrap on phones instead of hiding the tail offscreen', () => {
 test('voting scale keeps the 2x5 phone grid', () => {
   assert.match(css, /@media \(min-width: 480px\) \{ \.rating-options \{ grid-template-columns: repeat\(10, 1fr\); \} \}/);
 });
+
+test('ratings chart spans the full card width with 10 equal columns', () => {
+  assert.match(css, /\.chart-grid \{[^}]*display: grid;[^}]*grid-template-columns: repeat\(10, minmax\(0, 1fr\)\);[^}]*width: 100%;/);
+  assert.match(css, /\.chart-col \{[^}]*min-width: 0;/);
+  assert.match(css, /\.chart-bar \{[^}]*width: 100%;/);
+  assert.doesNotMatch(css, /\.ratings-chart[^{]*\{[^}]*max-width/, 'chart is not capped to a fixed width');
+});

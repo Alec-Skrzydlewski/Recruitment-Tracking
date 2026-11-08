@@ -297,9 +297,10 @@ test('analytics: one recruit dropdown, individual results, switching changes eve
     assert.equal(panel.textContent.includes(jargon), false, 'no ' + jargon);
   }
   assert.equal(panel.querySelectorAll('table, figure.hist').length, 0, 'no dense tables');
-  const chart = panel.querySelector('figure.ratings-chart svg[role="img"]');
+  const chart = panel.querySelector('figure.ratings-chart .chart-grid[role="img"]');
   assert.ok(chart, 'simple ratings chart shown');
-  assert.equal(chart.querySelectorAll('rect').length, 10);
+  assert.equal(chart.querySelectorAll('.chart-col').length, 10, 'all 10 score columns');
+  assert.deepEqual([...chart.querySelectorAll('.chart-axis')].map(a => a.textContent), ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']);
   assert.match(avery.note, /audit rotation/);
   assert.equal(document.getElementById('note-r-avery').labels[0].textContent, 'Notes on Avery Quill');
   await choose(select, 'r-finley');
@@ -420,9 +421,9 @@ test('showcase analytics: simple per-recruit stats, Absent events, and no fabric
   assert.match(items[0], new RegExp('^Info SessionSep 8, 2026Attended' + avg.replace('.', '\\.') + '/10 · ' + votes.length + ' ratings$'));
   assert.equal(items[1], 'Case CompSep 15, 2026Absent—');
   const counts = Array(10).fill(0); votes.forEach(v => counts[v.score - 1]++);
-  const chart = document.querySelector('figure.ratings-chart svg[role="img"]');
+  const chart = document.querySelector('figure.ratings-chart .chart-grid[role="img"]');
   assert.equal(chart.getAttribute('aria-label'), 'Number of ratings for each score from 1 to 10. ' + counts.map((c, i) => (i + 1) + ': ' + c).join(', '));
-  assert.deepEqual([...chart.querySelectorAll('.chart-count')].map(t => t.textContent), counts.filter(Boolean).map(String));
+  assert.deepEqual([...chart.querySelectorAll('.chart-count')].map(t => t.textContent), counts.map(c => (c ? String(c) : '')));
   assert.match(document.querySelector('figure.ratings-chart figcaption').textContent, new RegExp('How members rated Jakobi Meyers \\(' + votes.length + ' ratings\\)'));
   assert.equal(document.getElementById('note-r-jax-jakobi-meyers').value, '', 'no seeded notes about real players');
   act(() => root.unmount());

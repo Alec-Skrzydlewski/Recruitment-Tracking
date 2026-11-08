@@ -8,26 +8,22 @@ import { buildRecruitAnalytics, recruitChoices, resolveSelection, recruitCsv, fm
 function RatingsChart({ counts, name }) {
   const max = Math.max(1, ...counts)
   const total = counts.reduce((a, b) => a + b, 0)
-  const W = 320
-  const H = 120
-  const bw = W / 10
   const summary = counts.map((c, i) => `${i + 1}: ${c}`).join(', ')
   return (
     <figure className="ratings-chart">
       <figcaption className="small"><strong>How members rated {name}</strong> <span className="muted">({total === 1 ? '1 rating' : total + ' ratings'})</span></figcaption>
-      <svg viewBox={`0 0 ${W} ${H + 34}`} role="img" aria-label={`Number of ratings for each score from 1 to 10. ${summary}`}>
-        {counts.map((c, i) => {
-          const h = c ? Math.max(3, (c / max) * H) : 0
-          const x = i * bw
-          return (
-            <g key={i}>
-              <rect x={x + 4} y={14 + H - h} width={bw - 8} height={h} rx="3" className="hist-bar" />
-              {c > 0 && <text x={x + bw / 2} y={10 + H - h} textAnchor="middle" className="chart-count">{c}</text>}
-              <text x={x + bw / 2} y={H + 30} textAnchor="middle" className="hist-axis">{i + 1}</text>
-            </g>
-          )
-        })}
-      </svg>
+      {/* Ten equal columns spanning the full card width. */}
+      <div className="chart-grid" role="img" aria-label={`Number of ratings for each score from 1 to 10. ${summary}`}>
+        {counts.map((c, i) => (
+          <div key={i} className="chart-col" aria-hidden="true">
+            <span className="chart-count">{c > 0 ? c : ''}</span>
+            <div className="chart-track">
+              <div className={'chart-bar' + (c ? '' : ' chart-bar-empty')} style={{ height: c ? Math.max(3, (c / max) * 100) + '%' : 0 }} />
+            </div>
+            <span className="chart-axis">{i + 1}</span>
+          </div>
+        ))}
+      </div>
       <p className="small muted" style={{ margin: 0 }}>Score (1–10) along the bottom; bar height is the number of ratings.</p>
     </figure>
   )
