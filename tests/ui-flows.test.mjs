@@ -228,7 +228,8 @@ test('demo: admin note save failure keeps the draft', async () => {
   const backend = ui.createDemoBackend({ latencyMs: 0 });
   const flaky = { ...backend, call(email, action, extra) { return action === 'saveNote' ? Promise.reject(new Error('The server is busy. Try again in a moment.')) : backend.call(email, action, extra); } };
   const root = mount(createElement(ui.DemoApp, { backend: flaky }));
-  await until(() => document.getElementById('note-r-blake'), 'dashboard notes');
+  await choose(await until(() => document.getElementById('an-recruit'), 'analytics first'), 'r-blake');
+  await until(() => document.getElementById('note-r-blake'), 'notes on analytics');
   await type(document.getElementById('note-r-blake'), 'Great follow-up questions');
   const save = [...document.querySelectorAll('button')].filter(b => b.textContent === 'Save note').find(b => !b.disabled);
   await click(save);
@@ -263,9 +264,10 @@ async function go(url) {
 test('analytics: one recruit dropdown, individual results, switching changes every detail', async () => {
   const backend = ui.createDemoBackend({ latencyMs: 0 });
   const root = mount(createElement(ui.DemoApp, { backend }));
-  await until(() => byText('button[role="tab"]', 'Analytics'), 'admin tabs');
+  const select = await until(() => document.getElementById('an-recruit'), 'analytics is the default admin tab');
+  assert.equal(byText('button[role="tab"]', 'Dashboard'), undefined, 'no Dashboard tab');
+  assert.equal(document.querySelector('button[role="tab"]').textContent, 'Analytics');
   await click(byText('button[role="tab"]', 'Analytics'));
-  const select = await until(() => document.getElementById('an-recruit'), 'recruit select');
   assert.equal(new URLSearchParams(window.location.search).get('tab'), 'analytics', 'tab is linkable');
 
   // Exactly one control: the recruit dropdown. No cohort tables or filters.
@@ -285,20 +287,32 @@ test('analytics: one recruit dropdown, individual results, switching changes eve
 
   const snapshot = () => ({
     stats: [...panel.querySelectorAll('.stat')].map(s => s.textContent).join('|'),
-    events: document.querySelector('[aria-label^="Per-event results"] tbody').textContent,
-    hist: document.querySelector('figure.hist table').textContent,
+    events: document.querySelector('[aria-label^="Event results"]').textContent,
+    note: document.querySelector('textarea[id^="note-"]').value,
     meta: panel.querySelector('#an-detail + p, .row + p').textContent,
   });
   const avery = snapshot();
-  assert.match(avery.stats, /8\.22.*Mean/);
+  assert.match(avery.stats, /8\.2 \/10Average score\|5Members who voted\|3Events attended/);
+  for (const jargon of ['Mean', 'Median', 'SD', 'Ballots', 'Unique voters', 'Equal-event', 'Score distribution', 'Scores 1–10', 'How these numbers']) {
+    assert.equal(panel.textContent.includes(jargon), false, 'no ' + jargon);
+  }
+  assert.equal(panel.querySelectorAll('table, figure.hist').length, 0, 'no dense tables or charts');
+  assert.match(avery.note, /audit rotation/);
+  assert.equal(document.getElementById('note-r-avery').labels[0].textContent, 'Notes on Avery Quill');
   await choose(select, 'r-finley');
   await until(() => document.getElementById('an-detail').textContent === 'Finley Moss', 'switched');
   const finley = snapshot();
   for (const k of Object.keys(avery)) assert.notEqual(finley[k], avery[k], k + ' changed');
   assert.equal(panel.textContent.includes('Avery Quill'), true, 'only as a dropdown option');
-  assert.equal(document.querySelector('[aria-label^="Per-event results"]').textContent.includes('Avery'), false);
+  assert.equal(document.getElementById('note-r-avery'), null, 'previous recruit note not shown');
+  assert.equal(document.querySelectorAll('textarea[id^="note-"]').length, 1);
   assert.ok(byText('button', 'Export Finley Moss’s results (CSV)'));
-  assert.ok(byText('summary', 'How these numbers are calculated'));
+  await type(document.getElementById('note-r-finley'), 'Asked good questions');
+  await click(byText('button', 'Save note'));
+  await until(() => backend.snapshot().notes.some(n => n.recruitId === 'r-finley' && n.content === 'Asked good questions'), 'note saved');
+  assert.match(backend.snapshot().notes.find(n => n.recruitId === 'r-avery').content, /audit rotation/, 'other note untouched');
+  await go('/admin?tab=dashboard');
+  await until(() => document.getElementById('an-recruit'), 'legacy dashboard link lands on Analytics');
 
   // Deleting the selected recruit falls back to the first remaining recruit.
   await click(byText('button[role="tab"]', 'Recruits'));
@@ -375,11 +389,46 @@ test('showcase seed: default vote event has checked-in recruits and the dashboar
   assert.equal(/0\s*Votes/.test(document.body.textContent), false, 'sample votes are counted');
   await go('/vote');
   await until(() => byText('h1', 'Rate recruits'), 'vote page');
-  assert.equal(document.getElementById('vote-event').value, 'e-pro');
-  assert.equal(document.querySelectorAll('fieldset.rating').length, 9, 'checked-in recruits at the default event');
+  const sel = document.getElementById('vote-event');
+  assert.equal(sel.value, 'e-case');
+  assert.deepEqual([...sel.options].map(o => o.textContent), ['Info Session — Sep 8, 2026', 'Case Comp — Sep 15, 2026']);
+  assert.equal(/Professional Night|Case Competition/.test(document.body.textContent), false);
+  assert.equal(document.querySelectorAll('fieldset.rating').length, 8, 'checked-in recruits at the default event');
   assert.equal(document.querySelectorAll('fieldset.rating input:checked').length, 0, 'demo admin ballot starts empty');
   await click(document.querySelector('fieldset.rating input[aria-label^="9 for"]'));
   await until(() => byText('.status-saved', 'Saved'), 'admin vote saved');
+  act(() => root.unmount());
+  assert.deepEqual(network, []);
+});
+
+test('showcase analytics: simple per-recruit stats, Absent events, and no fabricated numbers without ratings', async () => {
+  const backend = ui.createShowcaseBackend({ latencyMs: 0 });
+  let root = mount(createElement(ui.DemoApp, { backend }));
+  const select = await until(() => document.getElementById('an-recruit'), 'analytics first');
+  await choose(select, 'r-jax-jakobi-meyers');
+  await until(() => document.getElementById('an-detail').textContent === 'Jakobi Meyers', 'switched');
+  const db = backend.snapshot();
+  const votes = db.votes.filter(v => v.recruitId === 'r-jax-jakobi-meyers');
+  const avg = (votes.reduce((a, v) => a + v.score, 0) / votes.length).toFixed(1);
+  const stats = [...document.querySelectorAll('.stat')].map(s => s.textContent);
+  assert.deepEqual(stats, [avg + ' /10Average score', new Set(votes.map(v => v.userEmail)).size + 'Members who voted', '1Events attended']);
+  const items = [...document.querySelectorAll('.event-result')].map(li => li.textContent);
+  assert.equal(items.length, 2);
+  assert.match(items[0], new RegExp('^Info SessionSep 8, 2026Attended' + avg.replace('.', '\\.') + '/10 · ' + votes.length + ' ratings$'));
+  assert.equal(items[1], 'Case CompSep 15, 2026Absent—');
+  assert.equal(document.getElementById('note-r-jax-jakobi-meyers').value, '', 'no seeded notes about real players');
+  act(() => root.unmount());
+
+  const noVotes = { ...backend, call(email, action, extra) {
+    return backend.call(email, action, extra).then(r => (action === 'getAdminData' ? { ...r, votes: [] } : r));
+  } };
+  root = mount(createElement(ui.DemoApp, { backend: noVotes }));
+  await until(() => document.getElementById('an-detail'), 'analytics');
+  const text = document.querySelector('.analytics').textContent;
+  assert.match(text, /—Average score0Members who voted/);
+  assert.match(text, /No ratings for .* yet/);
+  assert.match(text, /No ratings yet/);
+  assert.equal(/NaN|0\.0 \/10/.test(text), false);
   act(() => root.unmount());
   assert.deepEqual(network, []);
 });

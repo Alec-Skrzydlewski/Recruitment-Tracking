@@ -1,41 +1,46 @@
 import { formatEventDate } from '../../lib/eventDate'
 import { useMemo, useState } from 'react'
-import { buildRecruitAnalytics, recruitChoices, resolveSelection, recruitCsv, fmt, SMALL_SAMPLE } from '../../lib/analytics'
+import { buildRecruitAnalytics, recruitChoices, resolveSelection, recruitCsv, fmt } from '../../lib/analytics'
 
-const plural = (n, one, many) => n + ' ' + (n === 1 ? one : (many || one + 's'))
-
-function Histogram({ counts, label, id }) {
-  const max = Math.max(1, ...counts)
-  const total = counts.reduce((a, b) => a + b, 0)
-  const W = 300
-  const H = 120
-  const bw = W / 10
+// Individual results: one recruit at a time, chosen from a single dropdown.
+function RecruitNote({ recruit, ctl }) {
+  const id = recruit.id
+  const status = ctl.noteStatus[id]
+  const dirty = (ctl.noteDrafts[id] || '') !== (ctl.savedNotes[id] || '')
+  const noteId = 'note-' + id
   return (
-    <figure className="hist" aria-labelledby={id + '-cap'}>
-      <figcaption id={id + '-cap'} className="small muted">{label} ({plural(total, 'ballot')})</figcaption>
-      <svg viewBox={`0 0 ${W} ${H + 18}`} role="presentation" aria-hidden="true" focusable="false">
-        {counts.map((c, i) => {
-          const h = c ? Math.max(2, (c / max) * H) : 0
-          return (
-            <g key={i}>
-              <rect x={i * bw + 3} y={H - h} width={bw - 6} height={h} rx="3" className={c ? 'hist-bar' : 'hist-empty'} />
-              <text x={i * bw + bw / 2} y={H + 14} textAnchor="middle" className="hist-axis">{i + 1}</text>
-            </g>
-          )
-        })}
-      </svg>
-      <div className="table-wrap" role="region" aria-label={label + ' counts'} tabIndex={0}>
-        <table className="data-table compact">
-          <thead><tr><th scope="row">Score</th>{counts.map((_, i) => <th key={i} scope="col">{i + 1}</th>)}</tr></thead>
-          <tbody><tr><th scope="row">Ballots</th>{counts.map((c, i) => <td key={i}>{c}</td>)}</tr></tbody>
-        </table>
+    <section className="card" aria-labelledby="an-notes">
+      <h2 id="an-notes">Notes</h2>
+      <label className="field-label" htmlFor={noteId} style={{ marginTop: 8 }}>Notes on {recruit.name}</label>
+      <textarea
+        id={noteId}
+        value={ctl.noteDrafts[id] || ''}
+        onChange={e => ctl.editNote(id, e.target.value)}
+        rows={4}
+        maxLength={5000}
+        disabled={ctl.isTempId(id)}
+      />
+      <div className="row" style={{ marginTop: 8 }}>
+        <button
+          type="button"
+          className="btn-primary btn-sm"
+          onClick={() => ctl.saveNote(id)}
+          disabled={ctl.isTempId(id) || !!ctl.saving['note:' + id] || !dirty || ctl.wiping}
+        >Save note</button>
+        <span aria-live="polite" className="small">
+          {status === 'saving' && <span className="status status-saving">Saving…</span>}
+          {status === 'saved' && !dirty && <span className="status status-saved">✓ Saved</span>}
+          {dirty && status !== 'saving' && !String(status || '').startsWith('error:') && <span className="muted">Unsaved changes</span>}
+        </span>
       </div>
-    </figure>
+      {String(status || '').startsWith('error:') && (
+        <p className="status status-error" role="alert" style={{ marginTop: 6 }}>Note not saved: {status.slice(6)} Your text is still here.</p>
+      )}
+    </section>
   )
 }
 
-// Individual results: one recruit at a time, chosen from a single dropdown.
-export default function AnalyticsTab({ data }) {
+export default function AnalyticsTab({ data, ctl }) {
   const choices = useMemo(() => recruitChoices(data), [data])
   const [picked, setPicked] = useState('')
   const selectedId = resolveSelection(choices, picked)
@@ -61,6 +66,11 @@ export default function AnalyticsTab({ data }) {
   }
 
   const o = d.overall
+  const byEvent = new Map(d.perEvent.map(e => [String(e.eventId), e]))
+  const events = ((data && data.events) || []).map(ev => {
+    const e = byEvent.get(String(ev.id))
+    return { id: ev.id, name: ev.name, date: ev.date, attended: !!(e && e.attended), n: e ? e.n : 0, mean: e ? e.mean : null }
+  })
   return (
     <div className="stack analytics">
       <section className="card" aria-labelledby="an-pick">
@@ -80,77 +90,39 @@ export default function AnalyticsTab({ data }) {
           {[[d.major, d.secondMajor].filter(Boolean).join(' / '), d.gradYear ? 'Class of ' + d.gradYear : 'Graduation year not recorded'].filter(Boolean).join(' · ')}
         </p>
 
-        <div className="stats">
-          <div className="stat"><div className="stat-value">{fmt(o.mean)}</div><div className="stat-label">Mean</div></div>
-          <div className="stat"><div className="stat-value">{fmt(o.median, 1)}</div><div className="stat-label">Median</div></div>
-          <div className="stat"><div className="stat-value">{o.n}</div><div className="stat-label">Ballots</div></div>
-          <div className="stat"><div className="stat-value">{d.voters}</div><div className="stat-label">Unique voters</div></div>
+        <div className="stats stats-simple">
+          <div className="stat"><div className="stat-value">{o.n ? fmt(o.mean, 1) : '—'}{o.n > 0 && <span className="stat-unit"> /10</span>}</div><div className="stat-label">Average score</div></div>
+          <div className="stat"><div className="stat-value">{d.voters}</div><div className="stat-label">Members who voted</div></div>
+          <div className="stat"><div className="stat-value">{d.eventsAttended}</div><div className="stat-label">Events attended</div></div>
         </div>
-
-        {o.n === 0 ? (
-          <p className="small">
-            No valid ballots for {d.name} yet. Attended {plural(d.eventsAttended, 'event')}.
-            Ballots count once the recruit is marked present at an event and members rate them 1–10.
-          </p>
-        ) : (
-          <>
-            <ul className="small" style={{ paddingLeft: 18 }}>
-              <li>Spread: {o.sd != null ? `sample SD ${fmt(o.sd)}, ` : 'SD needs 2+ ballots, '}range {o.min}–{o.max}.</li>
-              <li>Attended {plural(d.eventsAttended, 'event')}; rated at {d.eventsRated}. Equal-event mean {fmt(d.equalEventMean)}.</li>
-            </ul>
-            <p className="small muted" style={{ marginTop: 6 }}>
-              {o.n < SMALL_SAMPLE
-                ? `Only ${plural(o.n, 'ballot')}: treat this as an early impression; one more ballot could move the mean a lot.`
-                : 'These numbers describe how these voters scored this recruit. They are not a prediction or a recommendation.'}
-            </p>
-            <Histogram counts={o.histogram} label={'Score distribution for ' + d.name} id={'h-' + d.id} />
-          </>
-        )}
+        <p className="small muted" style={{ marginTop: 4 }}>
+          {o.n === 0
+            ? `No ratings for ${d.name} yet. Members can rate a recruit once they are checked in at an event.`
+            : `The average of every 1–10 rating members gave ${d.name}. It reflects members’ impressions, not a prediction.`}
+        </p>
       </section>
 
       <section className="card" aria-labelledby="an-events">
-        <h2 id="an-events">By event</h2>
-        <p className="small muted" style={{ margin: '4px 0 10px' }}>
-          Events {d.name} attended or was rated at, in sheet order (not sorted by date; older events may have no date).
-        </p>
-        {d.perEvent.length === 0 ? <p className="small">Not marked present at any event.</p> : (
-          <div className="table-wrap" role="region" aria-label={'Per-event results for ' + d.name} tabIndex={0}>
-            <table className="data-table">
-              <thead>
-                <tr><th scope="col">Event</th><th scope="col">Present</th><th scope="col">Ballots</th><th scope="col">Voters</th><th scope="col">Mean</th><th scope="col">Median</th><th scope="col">SD</th><th scope="col">Range</th><th scope="col">Scores 1–10</th></tr>
-              </thead>
-              <tbody>
-                {d.perEvent.map(e => (
-                  <tr key={e.eventId}>
-                    <th scope="row">{e.name}<span className="small muted" style={{ display: 'block', fontWeight: 'normal' }}>{formatEventDate(e.date) || 'Date not set'}</span>{e.n > 0 && e.small && <span className="badge">small</span>}</th>
-                    <td>{e.attended ? 'Yes' : 'No'}</td>
-                    <td>{e.n}</td>
-                    <td>{e.voters}</td>
-                    <td>{fmt(e.mean)}</td>
-                    <td>{fmt(e.median, 1)}</td>
-                    <td>{fmt(e.sd)}</td>
-                    <td>{e.n ? `${e.min}–${e.max}` : '—'}</td>
-                    <td className="mono" aria-label={e.n ? 'Counts for scores 1 to 10: ' + e.histogram.join(', ') : 'No ballots'}>{e.n ? e.histogram.join(' ') : '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        <h2 id="an-events">Events</h2>
+        {events.length === 0 ? <p className="small" style={{ marginTop: 6 }}>No events yet.</p> : (
+          <ul className="event-results" aria-label={'Event results for ' + d.name}>
+            {events.map(e => (
+              <li key={e.id} className="event-result">
+                <div>
+                  <strong>{e.name}</strong>
+                  <span className="small muted" style={{ display: 'block' }}>{formatEventDate(e.date) || 'Date not set'}</span>
+                </div>
+                <span className={'badge ' + (e.attended ? 'badge-yes' : 'badge-no')}>{e.attended ? 'Attended' : 'Absent'}</span>
+                <span className="event-avg">
+                  {e.n > 0 ? <><strong>{fmt(e.mean, 1)}</strong>/10 <span className="small muted">· {e.n === 1 ? '1 rating' : e.n + ' ratings'}</span></> : <span className="small muted">{e.attended ? 'No ratings yet' : '—'}</span>}
+                </span>
+              </li>
+            ))}
+          </ul>
         )}
       </section>
 
-      <details className="card">
-        <summary><strong>How these numbers are calculated</strong></summary>
-        <ul className="small" style={{ paddingLeft: 18, marginTop: 8 }}>
-          <li><strong>Valid ballot:</strong> an integer score 1–10 for this recruit at an event they were marked present at — the same rule as the dashboard.</li>
-          <li><strong>Mean</strong> weighs every ballot the same; <strong>equal-event mean</strong> averages the per-event means so each rated event counts once.</li>
-          <li><strong>Median:</strong> the middle ballot (average of the two middle ones for an even count). <strong>SD:</strong> sample standard deviation (n − 1), shown with 2+ ballots.</li>
-          <li><strong>Small:</strong> fewer than {SMALL_SAMPLE} ballots — a reading aid, not a statistical test.</li>
-          <li>Ballots by members later removed or demoted still count. Individual voters and their scores are not shown.</li>
-          <li>No trends: events have no dates, and a vote’s timestamp is only when it was last changed.</li>
-          <li>The CSV contains only this recruit’s aggregate results (no voter identities). It is still private chapter data. A guard against spreadsheet formulas is applied but cannot be guaranteed for every program.</li>
-        </ul>
-      </details>
+      {ctl && <RecruitNote key={d.id} recruit={d} ctl={ctl} />}
     </div>
   )
 }
