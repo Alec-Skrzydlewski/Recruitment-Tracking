@@ -226,9 +226,9 @@ Analytics is the first admin tab (there is no separate Dashboard; old
 `?tab=dashboard` links open Analytics). For the selected recruit it shows three
 plain numbers: **Average score** (/10), **Members who voted** (each member
 counted once) and **Events attended**; a one-line note that ratings are
-members' impressions, not a prediction; a simple list of every event (name,
+members' impressions, not a prediction; a simple 1–10 bar chart of how many ratings got each score (counts above bars, accessible label; hidden when there are no ratings); a simple list of every event (name,
 date, Attended/Absent, average and number of ratings); and that recruit's
-**Notes**, edited and saved exactly as before. No medians, SDs, histograms or
+**Notes**, edited and saved exactly as before. No medians, SDs, score tables or
 dense tables. No individual voter data is shown.
 
 Computed in the browser from the admin snapshot

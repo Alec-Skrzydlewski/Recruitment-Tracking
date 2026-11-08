@@ -235,6 +235,9 @@ input[type='file'] { max-width: 100%; min-width: 0; font-size: 14px; }
 @media (min-width: 640px) { .event-result { grid-template-columns: 1fr auto 11rem; } .event-result .event-avg { grid-column: auto; text-align: right; } }
 .badge-yes { background: #e7f6ec; color: #1d6b3a; }
 .badge-no { background: var(--line); color: var(--muted); }
+.ratings-chart { margin: 16px 0 0; }
+.ratings-chart svg { width: 100%; max-width: 460px; height: auto; display: block; margin: 8px 0 4px; }
+.chart-count { font-size: 11px; font-weight: 600; fill: var(--text, #222); }
 .hist { margin-top: 12px; }
 .hist svg { width: 100%; max-width: 420px; height: auto; display: block; margin: 6px 0; }
 .hist-bar { fill: var(--purple); }
